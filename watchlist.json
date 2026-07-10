@@ -1,0 +1,23 @@
+{
+  "greenhouse": [
+    "cloudflare",
+    "datadog",
+    "elastic",
+    "figma",
+    "gitlab",
+    "mongodb",
+    "postman",
+    "vercel"
+  ],
+  "lever": [
+    "plaid",
+    "spotify"
+  ],
+  "ashby": [
+    "linear",
+    "sentry"
+  ],
+  "workable": [
+    "huggingface"
+  ]
+}

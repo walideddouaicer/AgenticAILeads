@@ -39,21 +39,33 @@ except ImportError:
 # CONFIG
 # ----------------------------------------------------------------------
 
-WATCHLIST = {
+# Watchlist lives in watchlist.json (manage it from the app's Watchlist tab).
+# The dict below is only the fallback if that file is missing/broken.
+_FALLBACK_WATCHLIST = {
     "greenhouse": [
         "gitlab", "datadog", "elastic", "cloudflare",
         "mongodb", "figma", "postman", "vercel",
     ],
-    "lever": [
-        "plaid", "spotify"
-    ],
-    "ashby": [
-        "linear", "sentry"
-    ],
-    "workable": [
-        "huggingface"
-    ],
+    "lever": ["plaid", "spotify"],
+    "ashby": ["linear", "sentry"],
+    "workable": ["huggingface"],
 }
+
+_WATCHLIST_FILE = Path(__file__).resolve().parent / "watchlist.json"
+
+
+def load_watchlist():
+    if _WATCHLIST_FILE.exists():
+        try:
+            wl = json.loads(_WATCHLIST_FILE.read_text(encoding="utf-8"))
+            return {p: [str(t).strip().lower() for t in wl.get(p, []) if str(t).strip()]
+                    for p in ["greenhouse", "lever", "ashby", "workable"]}
+        except (json.JSONDecodeError, OSError):
+            print("  [!] watchlist.json unreadable — using built-in fallback list")
+    return _FALLBACK_WATCHLIST
+
+
+WATCHLIST = load_watchlist()
 
 # FALLBACK ONLY — used when no configs/ directory exists. Once Phase 3
 # configs are in place, edit filters in configs/*.json (or via app.py UI).

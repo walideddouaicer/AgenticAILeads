@@ -12,8 +12,10 @@ Run:  streamlit run app.py
 import csv
 import hashlib
 import json
+import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from urllib.parse import quote
 
 import streamlit as st
 
@@ -25,10 +27,18 @@ SIGNALS_CSV = HERE / "signals.csv"
 ENRICHED_CSV = HERE / "enriched_signals.csv"
 STATE_FILE = HERE / "signals_state.json"
 INBOX_STATUS = HERE / "inbox_status.json"
+WATCHLIST_FILE = HERE / "watchlist.json"
 
 DEFAULT_TEMPLATE = (
     "Hi {first_name} — {hook}. Roles like that are exactly what we place. "
     "Worth a quick chat about how we can help you fill them faster?"
+)
+DEFAULT_EMAIL_SUBJECT = "Your {title} opening"
+DEFAULT_EMAIL_TEMPLATE = (
+    "Hi {first_name},\n\n"
+    "{hook} — filling roles like that is exactly what we do.\n\n"
+    "Worth a quick call this week? Happy to share how we'd approach it.\n\n"
+    "Best,\n"
 )
 FOLLOWUP_DAYS = 3
 FRESH_DAYS = 7      # signals older than this switch to "currently hiring" wording
@@ -57,6 +67,8 @@ def load_profile(name):
         cfg = {}
     cfg.setdefault("client_id", name)
     cfg.setdefault("dm_template", DEFAULT_TEMPLATE)
+    cfg.setdefault("email_subject", DEFAULT_EMAIL_SUBJECT)
+    cfg.setdefault("email_template", DEFAULT_EMAIL_TEMPLATE)
     cfg.setdefault("meeting_rate", DEFAULT_MEETING_RATE)
     for k, v in DEFAULTS.items():
         cfg.setdefault(k, v if not isinstance(v, (list, dict)) else type(v)())
@@ -186,6 +198,58 @@ def render_dm(template, row):
         return template
 
 
+# --------- watchlist helpers ---------
+
+ATS_URL_PATTERNS = [
+    ("greenhouse", r"greenhouse\.io/embed/job_board\?for=([A-Za-z0-9_-]+)"),
+    ("greenhouse", r"boards-api\.greenhouse\.io/v1/boards/([A-Za-z0-9_-]+)"),
+    ("greenhouse", r"(?:boards|job-boards)\.greenhouse\.io/([A-Za-z0-9_-]+)"),
+    ("lever", r"api\.lever\.co/v0/postings/([A-Za-z0-9_-]+)"),
+    ("lever", r"jobs(?:\.eu)?\.lever\.co/([A-Za-z0-9_-]+)"),
+    ("ashby", r"api\.ashbyhq\.com/posting-api/job-board/([A-Za-z0-9_.%-]+)"),
+    ("ashby", r"jobs\.ashbyhq\.com/([A-Za-z0-9_.%-]+)"),
+    ("workable", r"apply\.workable\.com/api/v1/widget/accounts/([A-Za-z0-9_-]+)"),
+    ("workable", r"apply\.workable\.com/([A-Za-z0-9_-]+)"),
+]
+
+
+def parse_board_url(url: str):
+    """Any job-board URL -> (platform, token) or (None, None)."""
+    url = (url or "").strip()
+    for platform, pat in ATS_URL_PATTERNS:
+        m = re.search(pat, url)
+        if m:
+            token = m.group(1).lower()
+            if token in ("api", "v1", "embed", "widget"):
+                continue
+            return platform, token
+    return None, None
+
+
+def load_watchlist():
+    if WATCHLIST_FILE.exists():
+        try:
+            wl = json.loads(WATCHLIST_FILE.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            wl = {}
+    else:
+        wl = {}
+    return {p: sorted(set(str(t).strip().lower() for t in wl.get(p, []) if str(t).strip()))
+            for p in ["greenhouse", "lever", "ashby", "workable"]}
+
+
+def save_watchlist(wl):
+    WATCHLIST_FILE.write_text(json.dumps(wl, indent=2), encoding="utf-8")
+
+
+def tracked_job_counts():
+    """{platform:token -> live job count} from the engine's state file."""
+    if not STATE_FILE.exists():
+        return {}
+    state = json.loads(STATE_FILE.read_text())
+    return {k: len(v) for k, v in state.items()}
+
+
 def set_stage(status, key, stage, notes=None):
     entry = status.get(key, {"status": "new", "on": "", "notes": ""})
     entry["status"] = stage
@@ -198,8 +262,8 @@ def set_stage(status, key, stage, notes=None):
 
 # ================================ UI ====================================
 
-tab_inbox, tab_clients, tab_configs = st.tabs(
-    ["📥 Daily Inbox", "👤 Clients", "⚙️ Client Configs"])
+tab_inbox, tab_clients, tab_watchlist, tab_configs = st.tabs(
+    ["📥 Daily Inbox", "👤 Clients", "📡 Watchlist", "⚙️ Client Configs"])
 
 # ---------------------------- TAB: Inbox --------------------------------
 
@@ -299,6 +363,17 @@ with tab_inbox:
                     edited = st.text_area("Draft DM (edit, then copy)", dm,
                                           height=130, key=f"dm_{wkey}")
                     st.code(edited, language=None)
+
+                    # one-click email compose (only when a real address exists)
+                    email = row.get("contact1_email", "")
+                    if "@" in email and "locked" not in email.lower():
+                        subj = render_dm(cfg.get("email_subject",
+                                                 DEFAULT_EMAIL_SUBJECT), row)
+                        body = render_dm(cfg.get("email_template",
+                                                 DEFAULT_EMAIL_TEMPLATE), row)
+                        st.markdown(
+                            f"[✉️ Compose email to {email}]"
+                            f"(mailto:{email}?subject={quote(subj)}&body={quote(body)})")
 
                     if eff == "new":
                         q1, q2 = st.columns(2)
@@ -436,6 +511,76 @@ with tab_clients:
                 st.download_button("⬇ Export this view as CSV (client report)", out,
                                    file_name=fname, mime="text/csv")
 
+# --------------------------- TAB: Watchlist ------------------------------
+
+with tab_watchlist:
+    wl = load_watchlist()
+    counts = tracked_job_counts()
+    total = sum(len(v) for v in wl.values())
+    st.markdown(f"### {total} companies watched")
+    st.caption("Every company here gets swept nightly. Paste any job-board URL "
+               "below — platform and token are detected automatically. "
+               "Newly added companies are baselined silently on their first "
+               "sweep (no false 'new job' flood).")
+
+    url_in = st.text_input(
+        "Paste a job-board URL",
+        placeholder="https://boards.greenhouse.io/acme  ·  https://jobs.lever.co/acme  ·  https://jobs.ashbyhq.com/acme  ·  https://apply.workable.com/acme",
+        key="wl_url")
+    if url_in.strip():
+        platform, token = parse_board_url(url_in)
+        if platform:
+            already = token in wl[platform]
+            if already:
+                st.info(f"**{token}** ({platform}) is already on the watchlist.")
+            else:
+                st.success(f"Detected: **{token}** on **{platform}**")
+                if st.button(f"➕ Add {token} to watchlist", type="primary",
+                             key="wl_add"):
+                    wl[platform].append(token)
+                    wl[platform] = sorted(set(wl[platform]))
+                    save_watchlist(wl)
+                    st.rerun()
+        else:
+            st.error("Couldn't detect a Greenhouse / Lever / Ashby / Workable "
+                     "board in that URL. Add manually below.")
+
+    with st.expander("Add manually (platform + token)"):
+        mc1, mc2, mc3 = st.columns([1, 2, 1])
+        with mc1:
+            m_platform = st.selectbox("Platform",
+                                      ["greenhouse", "lever", "ashby", "workable"],
+                                      key="wl_mplat")
+        with mc2:
+            m_token = st.text_input("Board token (e.g. 'acme')", key="wl_mtok")
+        with mc3:
+            st.write("")
+            st.write("")
+            if st.button("Add", key="wl_madd") and m_token.strip():
+                wl[m_platform].append(m_token.strip().lower())
+                wl[m_platform] = sorted(set(wl[m_platform]))
+                save_watchlist(wl)
+                st.rerun()
+
+    st.divider()
+    for platform in ["greenhouse", "lever", "ashby", "workable"]:
+        tokens = wl[platform]
+        st.markdown(f"**{platform.capitalize()}** — {len(tokens)} board(s)")
+        if not tokens:
+            st.caption("none yet")
+            continue
+        for i, token in enumerate(tokens):
+            k = f"{platform}:{token}"
+            n = counts.get(k)
+            rc1, rc2, rc3 = st.columns([3, 2, 1])
+            rc1.text(token)
+            rc2.caption(f"{n} live jobs tracked" if n is not None
+                        else "not swept yet — appears after next run")
+            if rc3.button("remove", key=f"wl_rm_{platform}_{i}"):
+                wl[platform].remove(token)
+                save_watchlist(wl)
+                st.rerun()
+
 # --------------------------- TAB: Configs --------------------------------
 
 with tab_configs:
@@ -477,6 +622,12 @@ with tab_configs:
         dm_template = st.text_area(
             "DM template — placeholders: {first_name} {hook} {company} {title} {location} {client}",
             cfg.get("dm_template", DEFAULT_TEMPLATE), height=110)
+        email_subject = st.text_input(
+            "Email subject (same placeholders)",
+            cfg.get("email_subject", DEFAULT_EMAIL_SUBJECT))
+        email_template = st.text_area(
+            "Email template (same placeholders)",
+            cfg.get("email_template", DEFAULT_EMAIL_TEMPLATE), height=140)
         meeting_rate = st.number_input("Rate per won meeting ($)",
                                        value=int(cfg.get("meeting_rate",
                                                          DEFAULT_MEETING_RATE)), step=25)
@@ -492,6 +643,8 @@ with tab_configs:
             "keyword_weights": cfg.get("keyword_weights", {}),
             "min_score": int(cfg.get("min_score", 0)),
             "dm_template": dm_template,
+            "email_subject": email_subject,
+            "email_template": email_template,
             "meeting_rate": int(meeting_rate),
         }
 
