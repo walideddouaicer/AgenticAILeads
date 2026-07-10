@@ -1,0 +1,17 @@
+{
+  "client_id": "id2",
+  "label": "client2",
+  "active": true,
+  "inclusion_keywords": [
+    "senior"
+  ],
+  "exclusion_keywords": [
+    "marketing"
+  ],
+  "allowed_locations": [
+    "france"
+  ],
+  "keyword_weights": {},
+  "min_score": 6,
+  "dm_template": "Hi {first_name} \u2014 {hook}. Roles like that are exactly what we place. Worth a quick chat about how we can help you fill them faster?"
+}

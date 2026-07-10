@@ -1,0 +1,19 @@
+{
+  "client_id": "default",
+  "label": "Own prospecting — tech recruiting niche",
+  "active": true,
+  "inclusion_keywords": [
+    "engineer", "developer", "devops", "data", "backend", "frontend",
+    "security", "cloud", "machine learning", "sre", "platform"
+  ],
+  "exclusion_keywords": ["intern", "internship", "working student"],
+  "allowed_locations": [],
+  "keyword_weights": {
+    "senior": 3,
+    "staff": 3,
+    "lead": 2,
+    "machine learning": 5,
+    "devops": 3
+  },
+  "min_score": 0
+}
