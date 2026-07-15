@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """
 Agentic AI Leads — Local CRM
-Tab 1: Daily Inbox    (signals -> DMs -> stages: contacted/replied/won, notes,
-                       dismiss, follow-up timers)
-Tab 2: Clients        (per-client page: all their leads, filters, metrics, export)
-Tab 3: Client Configs (profiles, live tester, dry-run)
+Tabs:
+  Outreach Queue — daily working view: follow-ups due (pre-drafted) + top-N
+                   ranked new sends, one-click copy / mark contacted,
+                   cross-client double-DM guard
+  Daily Inbox    — all signals -> DMs -> stages (contacted/replied/won),
+                   notes, dismiss, follow-up timers
+  Clients        — per-client page: leads, filters, metrics, CSV export
+  Mini-List      — free gift list for prospect agencies (CSV + branded HTML)
+  Watchlist      — boards being swept nightly
+  Client Configs — profiles, live tester, dry-run, backfill
 
 Run:  streamlit run app.py
 """
@@ -20,11 +26,13 @@ from urllib.parse import quote
 import streamlit as st
 
 from filter_engine import evaluate_job, DEFAULTS
+from minilist_engine import build_minilist, render_csv, render_html, DEFAULT_PITCH
 
 HERE = Path(__file__).resolve().parent
 CONFIG_DIR = HERE / "configs"
 SIGNALS_CSV = HERE / "signals.csv"
 ENRICHED_CSV = HERE / "enriched_signals.csv"
+CONTACTS_CACHE = HERE / "enriched_contacts.json"
 STATE_FILE = HERE / "signals_state.json"
 INBOX_STATUS = HERE / "inbox_status.json"
 WATCHLIST_FILE = HERE / "watchlist.json"
@@ -40,9 +48,20 @@ DEFAULT_EMAIL_TEMPLATE = (
     "Worth a quick call this week? Happy to share how we'd approach it.\n\n"
     "Best,\n"
 )
+DEFAULT_FOLLOWUP_TEMPLATE = (
+    "Hi {first_name} — floating this back up. {hook}, and roles like that "
+    "don't stay open long. Worth a quick chat this week?"
+)
+DEFAULT_FOLLOWUP2_TEMPLATE = (
+    "Hi {first_name} — last note from me. If filling roles faster ever becomes "
+    "a priority, happy to show you how we work: you pay per meeting that "
+    "actually happens, first one free. Door's open."
+)
 FOLLOWUP_DAYS = 3
+MAX_FOLLOWUPS = 2   # after follow-up #2 (breakup), lead leaves the queue
 FRESH_DAYS = 7      # signals older than this switch to "currently hiring" wording
 DEFAULT_MEETING_RATE = 150
+DAILY_QUEUE_CAP = 15   # default new sends/day (LinkedIn-safe)
 
 STAGES = ["contacted", "replied", "won"]
 STAGE_ICON = {"new": "", "contacted": "✅ ", "replied": "💬 ",
@@ -69,6 +88,8 @@ def load_profile(name):
     cfg.setdefault("dm_template", DEFAULT_TEMPLATE)
     cfg.setdefault("email_subject", DEFAULT_EMAIL_SUBJECT)
     cfg.setdefault("email_template", DEFAULT_EMAIL_TEMPLATE)
+    cfg.setdefault("followup_template", DEFAULT_FOLLOWUP_TEMPLATE)
+    cfg.setdefault("followup2_template", DEFAULT_FOLLOWUP2_TEMPLATE)
     cfg.setdefault("meeting_rate", DEFAULT_MEETING_RATE)
     for k, v in DEFAULTS.items():
         cfg.setdefault(k, v if not isinstance(v, (list, dict)) else type(v)())
@@ -113,14 +134,27 @@ def lead_key(row):
 
 
 def load_leads():
-    src = ENRICHED_CSV if ENRICHED_CSV.exists() else SIGNALS_CSV
+    """signals.csv is the source of truth; contacts are joined in live from
+    enriched_contacts.json, so new signals never wait on an enrichment
+    re-run. Falls back to enriched_signals.csv if signals.csv is missing."""
+    src = SIGNALS_CSV if SIGNALS_CSV.exists() else ENRICHED_CSV
     if not src.exists():
         return [], src.name
     rows = list(csv.DictReader(src.open(encoding="utf-8")))
+    try:
+        cache = json.loads(CONTACTS_CACHE.read_text(encoding="utf-8")) \
+            if CONTACTS_CACHE.exists() else {}
+    except json.JSONDecodeError:
+        cache = {}
     for r in rows:
         if not r.get("client"):
             r["client"] = "default"
-    return rows, src.name
+        if not r.get("contact1_name"):
+            for i, c in enumerate((cache.get(r.get("company", "")) or [])[:2], 1):
+                for k, v in c.items():
+                    r[f"contact{i}_{k}"] = v
+    label = src.name + (" + contacts" if cache else "")
+    return rows, label
 
 
 def load_status():
@@ -154,6 +188,11 @@ def effective_status(entry) -> str:
 def followup_due(entry) -> bool:
     if not entry or entry.get("status") != "contacted":
         return False
+    try:
+        if int(entry.get("fu", 0) or 0) >= MAX_FOLLOWUPS:
+            return False   # breakup already sent — stop chasing
+    except (TypeError, ValueError):
+        pass
     on = entry.get("on") or ""
     try:
         return (date.today() - datetime.strptime(on, "%Y-%m-%d").date()).days >= FOLLOWUP_DAYS
@@ -250,6 +289,15 @@ def tracked_job_counts():
     return {k: len(v) for k, v in state.items()}
 
 
+def mark_followed_up(status, key):
+    """Reset the follow-up timer and count the touch (day-3 -> day-6 -> stop)."""
+    e = status.get(key, {"status": "contacted", "on": "", "notes": ""})
+    e["on"] = date.today().isoformat()
+    e["fu"] = int(e.get("fu", 0) or 0) + 1
+    status[key] = e
+    save_status(status)
+
+
 def set_stage(status, key, stage, notes=None):
     entry = status.get(key, {"status": "new", "on": "", "notes": ""})
     entry["status"] = stage
@@ -262,8 +310,159 @@ def set_stage(status, key, stage, notes=None):
 
 # ================================ UI ====================================
 
-tab_inbox, tab_clients, tab_watchlist, tab_configs = st.tabs(
-    ["📥 Daily Inbox", "👤 Clients", "📡 Watchlist", "⚙️ Client Configs"])
+tab_queue, tab_inbox, tab_clients, tab_minilist, tab_watchlist, tab_configs = st.tabs(
+    ["🚀 Outreach Queue", "📥 Daily Inbox", "👤 Clients", "🎁 Mini-List",
+     "📡 Watchlist", "⚙️ Client Configs"])
+
+# ------------------------- TAB: Outreach Queue ---------------------------
+
+with tab_queue:
+    leads, src_name = load_leads()
+    status = load_status()
+
+    if not leads:
+        st.info("No signals yet — run signal_engine.py, then refresh.")
+    else:
+        # collision guard: contacts already touched, keyed by LinkedIn URL
+        contacted_by_link = {}
+        for r in leads:
+            e = status.get(lead_key(r))
+            if e and e.get("status") in ("contacted", "replied", "won"):
+                lk = (r.get("contact1_linkedin") or "").strip()
+                if lk:
+                    contacted_by_link.setdefault(lk, r.get("client", ""))
+
+        qc1, qc2, qc3 = st.columns([1, 1, 2])
+        with qc1:
+            q_client = st.selectbox("Client", ["all"] + all_clients(leads),
+                                    key="q_client")
+        with qc2:
+            q_cap = int(st.number_input("Daily cap (new sends)", 1, 50,
+                                        DAILY_QUEUE_CAP, key="q_cap"))
+
+        due, fresh = [], []
+        for r in leads:
+            if q_client != "all" and r.get("client") != q_client:
+                continue
+            e = status.get(lead_key(r))
+            if followup_due(e):
+                due.append(r)
+            elif effective_status(e) == "new":
+                fresh.append(r)
+
+        def _score(r):
+            try:
+                return int(r.get("score") or 0)
+            except ValueError:
+                return 0
+
+        # best first: has a named contact > lead score > freshness
+        fresh.sort(key=lambda r: (bool(r.get("contact1_name")), _score(r),
+                                  r.get("date", "")), reverse=True)
+
+        today_iso = date.today().isoformat()
+        sent_today = sum(
+            1 for e in status.values()
+            if e.get("on") == today_iso
+            and e.get("status") in ("contacted", "replied", "won"))
+        with qc3:
+            st.caption(f"Source: {src_name} — "
+                       f"**{len(due)} follow-up(s) due · "
+                       f"{min(len(fresh), q_cap)} of {len(fresh)} new queued · "
+                       f"{sent_today} touched today**")
+
+        def outreach_card(row, kind, i):
+            """One actionable card. kind: 'fu' (follow-up) or 'new'."""
+            key = lead_key(row)
+            entry = status.get(key)
+            client = row.get("client", "default")
+            cfg = load_profile(client)
+            wkey = f"q{kind}_{key}_{i}"
+            contact = row.get("contact1_name", "")
+
+            head = (("🔁 " if kind == "fu" else "🆕 ")
+                    + f"{row.get('company','?')} — {row.get('title','?')}  "
+                    f"[{client}]"
+                    + (f"  · {contact}" if contact else "  · ⚠ no contact"))
+            with st.expander(head, expanded=(i == 0)):
+                meta = " · ".join(x for x in [row.get("date", ""),
+                                              row.get("location", "")] if x)
+                if meta:
+                    st.caption(meta)
+
+                lk = (row.get("contact1_linkedin") or "").strip()
+                if lk and contacted_by_link.get(lk, client) != client:
+                    st.warning(f"{contact} was already contacted for client "
+                               f"'{contacted_by_link[lk]}' — don't double-DM.")
+                if contact:
+                    st.markdown(f"**{contact}** — {row.get('contact1_title','')}"
+                                + (f" · [open LinkedIn ↗]({lk})" if lk else ""))
+                else:
+                    st.caption("No contact yet — run enrichment_engine.py or "
+                               "find them manually on LinkedIn.")
+                if row.get("url"):
+                    st.markdown(f"[job posting]({row['url']})")
+
+                if kind == "fu":
+                    n_fu = int((entry or {}).get("fu", 0) or 0)
+                    tmpl = (cfg.get("followup2_template",
+                                    DEFAULT_FOLLOWUP2_TEMPLATE) if n_fu >= 1
+                            else cfg.get("followup_template",
+                                         DEFAULT_FOLLOWUP_TEMPLATE))
+                    st.caption(f"Follow-up #{n_fu + 1}"
+                               + (" (breakup)" if n_fu >= 1 else "")
+                               + f" — last touch {(entry or {}).get('on', '?')}")
+                else:
+                    tmpl = cfg.get("dm_template", DEFAULT_TEMPLATE)
+                st.code(render_dm(tmpl or DEFAULT_TEMPLATE, row), language=None)
+
+                email = row.get("contact1_email", "")
+                if "@" in email and "locked" not in email.lower():
+                    subj = render_dm(cfg.get("email_subject",
+                                             DEFAULT_EMAIL_SUBJECT), row)
+                    body = render_dm(tmpl or DEFAULT_TEMPLATE, row)
+                    st.markdown(f"[✉️ email {email}]"
+                                f"(mailto:{email}?subject={quote(subj)}"
+                                f"&body={quote(body)})")
+
+                b1, b2 = st.columns(2)
+                if kind == "fu":
+                    with b1:
+                        if st.button("🔁 Followed up", key=f"fud_{wkey}",
+                                     type="primary", use_container_width=True):
+                            mark_followed_up(status, key)
+                            st.rerun()
+                    with b2:
+                        if st.button("💬 They replied", key=f"rpd_{wkey}",
+                                     use_container_width=True):
+                            set_stage(status, key, "replied")
+                            st.rerun()
+                else:
+                    with b1:
+                        if st.button("✅ Sent — mark contacted",
+                                     key=f"ctd_{wkey}", type="primary",
+                                     use_container_width=True):
+                            set_stage(status, key, "contacted")
+                            st.rerun()
+                    with b2:
+                        if st.button("🚫 Dismiss", key=f"dxd_{wkey}",
+                                     use_container_width=True):
+                            set_stage(status, key, "dismissed")
+                            st.rerun()
+
+        st.markdown(f"#### 🔁 Follow-ups due ({len(due)}) — do these first")
+        if due:
+            for i, r in enumerate(due):
+                outreach_card(r, "fu", i)
+        else:
+            st.caption("None due.")
+
+        st.markdown(f"#### 🆕 New sends (top {q_cap} of {len(fresh)})")
+        if fresh:
+            for i, r in enumerate(fresh[:q_cap]):
+                outreach_card(r, "new", i)
+        else:
+            st.caption("No new leads — run signal_engine.py or grow the watchlist.")
 
 # ---------------------------- TAB: Inbox --------------------------------
 
@@ -403,8 +602,7 @@ with tab_inbox:
                             if eff == "contacted" and st.button(
                                     "Followed up (reset timer)", key=f"fu_{wkey}",
                                     use_container_width=True):
-                                status[key]["on"] = date.today().isoformat()
-                                save_status(status)
+                                mark_followed_up(status, key)
                                 st.rerun()
         if shown == 0:
             st.success("Nothing for this filter. Go check replies instead.")
@@ -511,6 +709,68 @@ with tab_clients:
                 st.download_button("⬇ Export this view as CSV (client report)", out,
                                    file_name=fname, mime="text/csv")
 
+# --------------------------- TAB: Mini-List ------------------------------
+
+with tab_minilist:
+    st.markdown("### 🎁 Free mini-list — the door-opener")
+    st.caption("Unsolicited gift for a prospect agency: companies hiring in "
+               "THEIR niche right now, from your tracked boards. Send it with "
+               "“Want 50 more per week?” — strongest $0 sales asset "
+               "you have.")
+
+    g1, g2 = st.columns(2)
+    with g1:
+        ml_prospect = st.text_input("Prospect agency name",
+                                    placeholder="Acme Staffing",
+                                    key="ml_prospect")
+        ml_keywords = st.text_input(
+            "Their niche keywords (comma-separated)",
+            placeholder="java, .net, backend", key="ml_kw")
+    with g2:
+        ml_locations = st.text_input(
+            "Their market (locations, comma-separated — empty = anywhere)",
+            placeholder="united states, remote", key="ml_loc")
+        ml_n = st.slider("List size", 5, 25, 10, key="ml_n")
+    ml_pitch = st.text_input("Footer pitch line", DEFAULT_PITCH, key="ml_pitch")
+
+    ml_kws = parse_csv_line(ml_keywords)
+    if not ml_kws:
+        st.info("Enter at least one niche keyword to build the list.")
+    else:
+        ml_rows = build_minilist(ml_kws, parse_csv_line(ml_locations),
+                                 n=int(ml_n))
+        if not ml_rows:
+            st.warning("No tracked jobs match — widen the keywords or grow "
+                       "the watchlist.")
+        else:
+            n_contact = sum(1 for r in ml_rows if r["contact_name"])
+            st.caption(f"**{len(ml_rows)} companies** ({n_contact} with a "
+                       "named contact). Companies with contacts and multiple "
+                       "matching roles rank first.")
+            st.dataframe(
+                ml_rows, use_container_width=True, height=340,
+                column_config={
+                    "job_url": st.column_config.LinkColumn("job_url"),
+                    "contact_linkedin":
+                        st.column_config.LinkColumn("contact_linkedin")})
+
+            ml_slug = re.sub(r"[^a-z0-9]+", "-",
+                             (ml_prospect or "prospect").lower()).strip("-")
+            ml_fname = f"minilist_{ml_slug}_{date.today().isoformat()}"
+            d1, d2 = st.columns(2)
+            with d1:
+                st.download_button("⬇ CSV (raw data)", render_csv(ml_rows),
+                                   file_name=f"{ml_fname}.csv",
+                                   mime="text/csv", use_container_width=True)
+            with d2:
+                st.download_button(
+                    "⬇ Branded one-pager (HTML)",
+                    render_html(ml_prospect or "you", ml_rows, ml_pitch),
+                    file_name=f"{ml_fname}.html", mime="text/html",
+                    use_container_width=True)
+            st.caption("Open the HTML and Ctrl+P → PDF for a clean "
+                       "attachment, or paste the top rows straight into a DM.")
+
 # --------------------------- TAB: Watchlist ------------------------------
 
 with tab_watchlist:
@@ -544,6 +804,33 @@ with tab_watchlist:
         else:
             st.error("Couldn't detect a Greenhouse / Lever / Ashby / Workable "
                      "board in that URL. Add manually below.")
+
+    with st.expander("Bulk import — paste anything containing board URLs "
+                     "(page source, HN thread, newsletter)"):
+        blob = st.text_area("Paste text here", height=140, key="wl_bulk",
+                            placeholder="Any text with greenhouse/lever/ashby/"
+                                        "workable links — all are detected.")
+        if blob.strip():
+            import html as _html
+            bulk_found = set()
+            for _platform, _pat in ATS_URL_PATTERNS:
+                for m in re.finditer(_pat, _html.unescape(blob), re.IGNORECASE):
+                    t = m.group(1).lower()
+                    if t not in ("api", "v1", "embed", "widget"):
+                        bulk_found.add((_platform, t))
+            bulk_new = sorted(x for x in bulk_found if x[1] not in wl[x[0]])
+            st.caption(f"**{len(bulk_found)}** board(s) detected — "
+                       f"**{len(bulk_new)}** not yet watched")
+            if bulk_new:
+                st.write(", ".join(f"`{t}` ({p})" for p, t in bulk_new))
+                if st.button(f"➕ Add all {len(bulk_new)}", type="primary",
+                             key="wl_bulk_add"):
+                    for p, t in bulk_new:
+                        wl[p].append(t)
+                    for p in wl:
+                        wl[p] = sorted(set(wl[p]))
+                    save_watchlist(wl)
+                    st.rerun()
 
     with st.expander("Add manually (platform + token)"):
         mc1, mc2, mc3 = st.columns([1, 2, 1])
@@ -628,6 +915,12 @@ with tab_configs:
         email_template = st.text_area(
             "Email template (same placeholders)",
             cfg.get("email_template", DEFAULT_EMAIL_TEMPLATE), height=140)
+        followup_template = st.text_area(
+            f"Follow-up #1 (due {FOLLOWUP_DAYS} days after contact, same placeholders)",
+            cfg.get("followup_template", DEFAULT_FOLLOWUP_TEMPLATE), height=90)
+        followup2_template = st.text_area(
+            "Follow-up #2 — breakup (last touch, same placeholders)",
+            cfg.get("followup2_template", DEFAULT_FOLLOWUP2_TEMPLATE), height=90)
         meeting_rate = st.number_input("Rate per won meeting ($)",
                                        value=int(cfg.get("meeting_rate",
                                                          DEFAULT_MEETING_RATE)), step=25)
@@ -645,6 +938,8 @@ with tab_configs:
             "dm_template": dm_template,
             "email_subject": email_subject,
             "email_template": email_template,
+            "followup_template": followup_template,
+            "followup2_template": followup2_template,
             "meeting_rate": int(meeting_rate),
         }
 
