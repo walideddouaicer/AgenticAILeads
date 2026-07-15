@@ -83,6 +83,37 @@ with qc3:
 C.render_engine_panel()
 
 
+def _reset_focus():
+    st.session_state["q_focus_done"] = 0
+    st.session_state["q_focus_idx"] = 0
+
+
+fm1, fm2 = st.columns([1, 3], vertical_alignment="center")
+with fm1:
+    focus_mode = st.toggle("🎯 Focus mode", key="q_focus",
+                           on_change=_reset_focus,
+                           help="One card at a time with a progress bar — "
+                               "Sent/Dismiss/Followed-up auto-advances to "
+                               "the next lead. Toggle off for the full list.")
+with fm2:
+    u = C.undo_available()
+    if u and st.button(f"↩ Undo: {u['label']}", key="q_undo",
+                       help="Restores the previous stage/notes/follow-up "
+                            "state of the last lead you changed."):
+        label = C.undo_last()
+        if st.session_state.get("q_focus"):
+            st.session_state["q_focus_done"] = max(
+                0, st.session_state.get("q_focus_done", 0) - 1)
+        C.push_toast(f"Undone: {label}", "↩")
+        st.rerun()
+
+
+def _count_focus_action():
+    if st.session_state.get("q_focus"):
+        st.session_state["q_focus_done"] = \
+            st.session_state.get("q_focus_done", 0) + 1
+
+
 def lead_label(row):
     return f"{row.get('company', '?')} — {row.get('title', '?')}"
 
@@ -149,6 +180,7 @@ def outreach_card(row, kind, i):
                                   f"follow-up #{C.MAX_FOLLOWUPS} (breakup) "
                                   "the lead leaves the queue."):
                     C.mark_followed_up(status, key, lead_label(row))
+                    _count_focus_action()
                     st.rerun()
             with b2:
                 if st.button("💬 They replied", key=f"rpd_{wkey}",
@@ -157,6 +189,7 @@ def outreach_card(row, kind, i):
                                   "handle the conversation in the Inbox."):
                     C.set_stage(status, key, "replied",
                                 lead_label=lead_label(row))
+                    _count_focus_action()
                     st.rerun()
         else:
             with b1:
@@ -167,6 +200,7 @@ def outreach_card(row, kind, i):
                                   "Starts the follow-up timer."):
                     C.set_stage(status, key, "contacted",
                                 lead_label=lead_label(row))
+                    _count_focus_action()
                     st.rerun()
             with b2:
                 if st.button("🚫 Dismiss", key=f"dxd_{wkey}",
@@ -175,20 +209,48 @@ def outreach_card(row, kind, i):
                                   "duplicate…). Undo is available after."):
                     C.set_stage(status, key, "dismissed",
                                 lead_label=lead_label(row))
+                    _count_focus_action()
                     st.rerun()
 
 
-st.markdown(f"#### 🔁 Follow-ups due ({len(due)}) — do these first")
-if due:
-    for i, r in enumerate(due):
-        outreach_card(r, "fu", i)
+if focus_mode:
+    # one card at a time: follow-ups first, then the capped new sends
+    work = [(r, "fu") for r in due] + [(r, "new") for r in fresh[:q_cap]]
+    done = st.session_state.get("q_focus_done", 0)
+    total = done + len(work)
+    if not work:
+        st.success("🎉 Queue clear — every follow-up and new send for today "
+                   "is done. Check the Inbox for replies, or raise the "
+                   "daily cap if you have volume left.")
+        st.session_state["q_focus_done"] = 0
+        st.session_state["q_focus_idx"] = 0
+    else:
+        idx = st.session_state.get("q_focus_idx", 0) % len(work)
+        st.progress(done / total if total else 0.0,
+                    text=f"Send {min(done + 1, total)} of {total}"
+                         f"  ·  {len(due)} follow-up(s), "
+                         f"{len(work) - len(due)} new")
+        row, kind = work[idx]
+        outreach_card(row, kind, 0)
+        sk1, _ = st.columns([1, 3])
+        with sk1:
+            if st.button("Skip →", key="q_skip_btn", width="stretch",
+                         help="Puts this card at the back and shows the "
+                              "next one — nothing is recorded."):
+                st.session_state["q_focus_idx"] = idx + 1
+                st.rerun()
 else:
-    st.caption("None due.")
+    st.markdown(f"#### 🔁 Follow-ups due ({len(due)}) — do these first")
+    if due:
+        for i, r in enumerate(due):
+            outreach_card(r, "fu", i)
+    else:
+        st.caption("None due.")
 
-st.markdown(f"#### 🆕 New sends (top {q_cap} of {len(fresh)})")
-if fresh:
-    for i, r in enumerate(fresh[:q_cap]):
-        outreach_card(r, "new", i)
-else:
-    st.caption("No new leads — run the sweep (Home page) or grow the "
-               "watchlist (System → Watchlist).")
+    st.markdown(f"#### 🆕 New sends (top {q_cap} of {len(fresh)})")
+    if fresh:
+        for i, r in enumerate(fresh[:q_cap]):
+            outreach_card(r, "new", i)
+    else:
+        st.caption("No new leads — run the sweep (Home page) or grow the "
+                   "watchlist (System → Watchlist).")

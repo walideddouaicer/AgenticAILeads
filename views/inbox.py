@@ -36,7 +36,8 @@ with c3:
     st.caption(f"Source: {src_name} — {len(leads)} signals — "
                f"**{n_new} new · {n_due} follow-up(s) due**")
 
-shown = 0
+# pass 1: collect every row matching the filters (newest first)
+visible = []
 for row in reversed(leads):
     key = C.lead_key(row)
     entry = status.get(key)
@@ -53,12 +54,34 @@ for row in reversed(leads):
     )
     if not keep:
         continue
+    visible.append((row, key, entry, eff, due))
 
-    shown += 1
-    if shown > 100:
-        st.caption("…more hidden (first 100 shown)")
-        break
-    wkey = f"{key}_{shown}"  # widget key: unique even for duplicate rows
+if not visible:
+    st.success("Nothing for this filter. Go check replies instead.")
+    st.stop()
+
+# pass 2: paginate, 25 per page
+PER_PAGE = 25
+n_pages = (len(visible) + PER_PAGE - 1) // PER_PAGE
+if st.session_state.get("inbox_page", 1) > n_pages:
+    st.session_state["inbox_page"] = n_pages   # filters shrank the list
+if n_pages > 1:
+    p1, p2 = st.columns([1, 4], vertical_alignment="center")
+    with p1:
+        page = int(st.number_input("Page", 1, n_pages, key="inbox_page",
+                                   help=f"{PER_PAGE} signals per page, "
+                                        "newest first."))
+else:
+    page = 1
+start = (page - 1) * PER_PAGE
+chunk = visible[start:start + PER_PAGE]
+if n_pages > 1:
+    with p2:
+        st.caption(f"Showing {start + 1}–{start + len(chunk)} "
+                   f"of {len(visible)}")
+
+for offset, (row, key, entry, eff, due) in enumerate(chunk):
+    wkey = f"{key}_{start + offset}"  # unique even for duplicate rows
 
     notes_preview = (entry or {}).get("notes", "")
     head = (f"{row.get('company','?')} — {row.get('title','?')}  "
@@ -176,6 +199,3 @@ for row in reversed(leads):
                                  f"{C.FOLLOWUP_DAYS}-day timer."):
                         C.mark_followed_up(status, key, label)
                         st.rerun()
-
-if shown == 0:
-    st.success("Nothing for this filter. Go check replies instead.")
