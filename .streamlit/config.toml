@@ -1,0 +1,16 @@
+# Agentic AI Leads — brand theme (acid lime on light, dark sidebar)
+[theme]
+base = "light"
+primaryColor = "#D8FF3E"
+backgroundColor = "#FCFCFB"
+secondaryBackgroundColor = "#F2F2EE"
+textColor = "#111111"
+
+[theme.sidebar]
+backgroundColor = "#111111"
+secondaryBackgroundColor = "#1D1D1B"
+textColor = "#FAFAF5"
+primaryColor = "#D8FF3E"
+
+[server]
+runOnSave = true
