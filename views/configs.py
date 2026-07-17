@@ -96,6 +96,22 @@ with col_form:
                                         "meeting. Drives the Billable "
                                         "numbers on Home and client pages.")
 
+    st.subheader("Delivery channel")
+    ch_cur = cfg.get("channel", "linkedin")
+    channel = st.selectbox(
+        "Outreach channel", C.CHANNELS,
+        index=C.CHANNELS.index(ch_cur) if ch_cur in C.CHANNELS else 0,
+        help="How this client's leads go out. 'linkedin' = manual DMs (the "
+             "default); 'email'/'both' also feed the email tool via the "
+             "delivery layer. Shown as a badge on queue cards. Queue "
+             "behaviour is unchanged either way.")
+    campaign_id = st.text_input(
+        "Email campaign id (optional)", cfg.get("campaign_id", ""),
+        help="The campaign/sequence id in your email tool (Instantly UUID, "
+             "Smartlead numeric id, or Apollo emailer_campaign id). Used by "
+             "the export and 'Sync replies' button. Leave blank for "
+             "LinkedIn-only clients.")
+
     new_cfg = {
         "client_id": client_id.strip(),
         "label": label.strip(),
@@ -112,6 +128,8 @@ with col_form:
         "followup_template": followup_template,
         "followup2_template": followup2_template,
         "meeting_rate": int(meeting_rate),
+        "channel": channel,
+        "campaign_id": campaign_id.strip(),
     }
 
     s1, s2 = st.columns(2)

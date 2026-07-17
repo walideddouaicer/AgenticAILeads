@@ -71,6 +71,47 @@ digraph pipeline {
                "dismissed = out of the pipeline.")
 
 # ------------------------------------------------------------------ (b)
+with section("integrations", "🔌 Integrations (email tools)"):
+    st.markdown("""
+Outreach is manual by default — the app drafts, you send on LinkedIn.
+An email tool can be plugged in later by adding **one API key to
+`.env`**; no code change. Nothing is ever sent automatically — sending
+requires a configured key **and** a button press.
+
+**Status now:**
+""")
+    for a in C.delivery_adapters():
+        ok = a.is_configured()
+        badge = "🟢 configured" if ok else "⚪ not configured"
+        keyline = (f" · key `{a.key_env}`" if a.key_env
+                   else " · no key needed")
+        st.markdown(f"- **{a.name}** — {badge}{keyline}")
+        if a.setup_hint:
+            st.caption(a.setup_hint)
+    active = C.active_email_adapter()
+    st.markdown("**Active email adapter:** "
+                + (f"`{active.name}`" if active else
+                   "_none — manual LinkedIn only_"))
+    st.markdown("""
+**To enable one:** create/edit `.env` next to `app.py` and add the key,
+e.g. `INSTANTLY_API_KEY=…`, `SMARTLEAD_API_KEY=…`, or reuse
+`APOLLO_API_KEY=…` for Apollo sequences. Then, per client
+(**System → Client Configs**), set the **channel** to `email`/`both`
+and paste the tool's **campaign id**.
+
+**What each piece does:**
+- **Export for email tool** (Outreach Queue + Client Pages) — an
+  Instantly-format lead-import CSV of leads with a real unlocked email.
+  Works today with zero API access; import it into your tool yourself.
+- **Sync replies** (Client Pages) — polls the configured tool for
+  replies and moves matched leads (by email) to the **replied** stage.
+  Polling only, on button press — no webhooks, no auto-send.
+- Verify payloads before the first real send with
+  `python delivery.py --probe` (prints the exact requests each adapter
+  would send, without sending). Fields marked `TODO(verify)` in
+  `delivery.py` are the vendor-specific ones to confirm.
+""")
+
 with section("home", "🏠 Page guide — Home"):
     st.markdown(f"""
 - **New signals today / Queue size / Follow-ups due / Replies to handle**
@@ -202,6 +243,10 @@ with section("clients", "👤 Page guide — Client Pages"):
   **Billable** = won × meeting rate.
 - **⬇ Export this view as CSV** — the exact filtered table, ready to
   send as a client report.
+- **📤 Email tool** — export the client's leads as an Instantly-format
+  import CSV (unlocked emails only), and **Sync replies** to pull
+  replies from a configured email tool into the 'replied' stage. See
+  the **Integrations** section for setup. Disabled until a key is set.
 """)
 
 with section("minilist", "🎁 Page guide — Mini-List"):
@@ -263,6 +308,10 @@ through every *active* profile.
 - **Outreach & billing** — DM, email, follow-up #1 and breakup
   templates (placeholders: `{first_name} {hook} {company} {title}
   {location} {client}`), and the per-meeting rate.
+- **Delivery channel** — `linkedin` (manual, default), `email`, or
+  `both`, plus an optional email **campaign id**. Shown as a badge on
+  queue cards; drives the export/sync on the client page. Queue
+  behaviour is unchanged regardless. See the **Integrations** section.
 - **💾 Save profile** — writes the JSON; takes effect next sweep.
 - **🗑 Delete profile** — type the exact client ID to enable the
   delete button (leads/history stay in the data files).

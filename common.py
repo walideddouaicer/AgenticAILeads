@@ -35,6 +35,7 @@ from urllib.parse import quote
 
 import streamlit as st
 
+import delivery
 from filter_engine import DEFAULTS
 
 HERE = Path(__file__).resolve().parent
@@ -124,6 +125,11 @@ STAGE_COLORS = {
 # light backgrounds get dark text, the rest white
 _BADGE_FG = {"new": "#111111", "replied": "#111111"}
 
+# outreach channel (per-client) — badge palette
+CHANNELS = ["linkedin", "email", "both"]
+CHANNEL_COLORS = {"linkedin": "#4A90D9", "email": "#D8FF3E", "both": "#7A5FD0"}
+_CHANNEL_FG = {"email": "#111111"}
+
 
 # ============================ look & feel ============================
 
@@ -176,6 +182,16 @@ def stage_badge(stage: str, due: bool = False) -> str:
         out += ('<span class="aal-badge" style="background:#111111;'
                 'color:#D8FF3E">follow-up due</span>')
     return out
+
+
+def channel_badge(channel: str) -> str:
+    """Colored HTML badge for a client's outreach channel."""
+    ch = (channel or "linkedin").lower()
+    bg = CHANNEL_COLORS.get(ch, "#999999")
+    fg = _CHANNEL_FG.get(ch, "#ffffff")
+    icon = {"linkedin": "in", "email": "✉", "both": "in+✉"}.get(ch, "")
+    return (f'<span class="aal-badge" style="background:{bg};color:{fg}">'
+            f'{icon} {ch}</span>')
 
 
 # ============================ toasts & undo ============================
@@ -254,6 +270,10 @@ def load_profile(name):
     cfg.setdefault("followup_template", DEFAULT_FOLLOWUP_TEMPLATE)
     cfg.setdefault("followup2_template", DEFAULT_FOLLOWUP2_TEMPLATE)
     cfg.setdefault("meeting_rate", DEFAULT_MEETING_RATE)
+    # optional delivery fields (added by the channel-ready delivery layer;
+    # absent in older config files, which stay valid)
+    cfg.setdefault("channel", "linkedin")
+    cfg.setdefault("campaign_id", "")
     for k, v in DEFAULTS.items():
         cfg.setdefault(k, v if not isinstance(v, (list, dict)) else type(v)())
     return cfg
@@ -409,6 +429,52 @@ def render_dm(template, row):
 
 def mailto_link(email, subject, body):
     return f"mailto:{email}?subject={quote(subject)}&body={quote(body)}"
+
+
+# --------- delivery layer (email tools plug in via .env keys) ---------
+
+def delivery_adapters():
+    """All adapters, bound to this app's .env (AAL_DATA_DIR-aware)."""
+    return delivery.all_adapters(env_file=ENV_FILE)
+
+
+def active_email_adapter():
+    """First configured email adapter, or None (manual excluded)."""
+    return delivery.active_email_adapter(env_file=ENV_FILE)
+
+
+def apply_replies(adapter, campaign_id=None):
+    """Poll the adapter for replies and move matched leads to 'replied'.
+
+    Matches on contact email; only leads currently 'new' or 'contacted'
+    are advanced (never downgrades 'won'/'dismissed'). Writes status
+    directly (no toast/undo) so it's usable from the CLI too — the app
+    shows its own toast afterwards. Returns a summary dict."""
+    try:
+        emails = adapter.sync_replies(campaign_id)
+    except Exception as e:  # network/HTTP/parse — surface, don't crash
+        return {"error": f"{e.__class__.__name__}: {e}", "matched": 0}
+    email_set = {str(e).strip().lower() for e in (emails or []) if e}
+    if not email_set:
+        return {"emails": 0, "matched": 0, "changed": []}
+    leads, _ = load_leads()
+    status = load_status()
+    changed = []
+    for r in leads:
+        em = (r.get("contact1_email") or "").strip().lower()
+        if not em or em not in email_set:
+            continue
+        k = lead_key(r)
+        if effective_status(status.get(k)) in ("new", "contacted"):
+            e = status.get(k, {"status": "new", "on": "", "notes": ""})
+            e["status"] = "replied"
+            e["on"] = date.today().isoformat()
+            status[k] = e
+            changed.append(r)
+    if changed:
+        save_status(status)
+    return {"emails": len(email_set), "matched": len(changed),
+            "changed": changed}
 
 
 # --------- manual contacts (Apollo API enrichment is plan-gated) ---------

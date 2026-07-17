@@ -39,6 +39,8 @@ d = lambda n: (today - timedelta(days=n)).isoformat()
     "inclusion_keywords": ["java", "backend"], "exclusion_keywords": [],
     "allowed_locations": ["united states", "remote"],
     "keyword_weights": {}, "min_score": 0, "meeting_rate": 200,
+    # delivery layer: email channel with a campaign id
+    "channel": "both", "campaign_id": "camp-fixture-123",
 }, indent=2), encoding="utf-8")
 
 # --- watchlist ---
@@ -90,13 +92,14 @@ status = {
 }
 (FIX / "inbox_status.json").write_text(json.dumps(status, indent=1))
 
-# --- contacts cache ---
+# --- contacts cache (gitlab has a real email -> exportable; plaid locked) ---
 (FIX / "enriched_contacts.json").write_text(json.dumps({
     "gitlab": [{"name": "Jane Doe", "title": "Head of Talent",
                 "linkedin": "https://linkedin.com/in/janedoe",
                 "email": "jane@gitlab.com"}],
     "plaid": [{"name": "Ana Ruiz", "title": "Recruiting Manager",
-               "linkedin": "https://linkedin.com/in/anaruiz", "email": ""}],
+               "linkedin": "https://linkedin.com/in/anaruiz",
+               "email": "(locked — reveal in Apollo UI costs 1 credit)"}],
 }, indent=2), encoding="utf-8")
 
 # --- signals_state.json (live jobs for Live Jobs / mini-list / dry-run) ---

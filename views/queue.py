@@ -7,6 +7,7 @@ One-click copy / mark contacted, cross-client double-DM guard.
 import streamlit as st
 
 import common as C
+import delivery
 
 C.page_header("🚀 Outreach Queue", "queue")
 
@@ -82,6 +83,21 @@ with qc3:
 
 C.render_engine_panel()
 
+# export the current client's leads for an email tool (Instantly format).
+# Only unlocked-email leads are included; works today with zero API access.
+_client_leads = [r for r in leads
+                 if q_client == "all" or r.get("client") == q_client]
+_emailable = [r for r in _client_leads if delivery.has_real_email(r)]
+st.download_button(
+    f"📤 Export for email tool ({len(_emailable)} with email)",
+    delivery.instantly_csv(_client_leads),
+    file_name=f"instantly_{q_client}_{today_iso}.csv", mime="text/csv",
+    disabled=not _emailable,
+    help="Instantly-format lead-import CSV for the current client filter — "
+         "email, first_name, last_name, company_name, hook, title. Only "
+         "leads with a real unlocked email are included. No sending; import "
+         "it into your email tool yourself.")
+
 
 def _reset_focus():
     st.session_state["q_focus_done"] = 0
@@ -132,6 +148,8 @@ def outreach_card(row, kind, i):
             f"[{client}]"
             + (f"  · {contact}" if contact else "  · ⚠ no contact"))
     with st.expander(head, expanded=(i == 0)):
+        st.markdown(C.channel_badge(cfg.get("channel", "linkedin")),
+                    unsafe_allow_html=True)
         meta = " · ".join(x for x in [row.get("date", ""),
                                       row.get("location", "")] if x)
         if meta:

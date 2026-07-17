@@ -5,6 +5,7 @@ from datetime import date, timedelta
 import streamlit as st
 
 import common as C
+import delivery
 
 C.page_header("👤 Client Pages", "clients")
 
@@ -37,6 +38,8 @@ if has_cfg:
                          + ("…" if len(cfg["inclusion_keywords"]) > 6 else ""))
 else:
     info_bits.append("(no config file — data only)")
+if has_cfg:
+    info_bits.append("channel: " + cfg.get("channel", "linkedin"))
 st.caption(" · ".join(info_bits))
 
 if not client_leads:
@@ -126,3 +129,46 @@ if table:
                        file_name=fname, mime="text/csv",
                        help="Exactly the rows shown above, with your current "
                             "filters applied — ready to send to the client.")
+
+# --- email-tool delivery (works today via CSV; API optional) ---
+st.divider()
+st.markdown("#### 📤 Email tool")
+emailable = [r for r in client_leads if delivery.has_real_email(r)]
+dc1, dc2 = st.columns([1, 1])
+with dc1:
+    st.download_button(
+        f"⬇ Export for email tool ({len(emailable)} with email)",
+        delivery.instantly_csv(client_leads),
+        file_name=f"instantly_{sel}_{date.today().isoformat()}.csv",
+        mime="text/csv", disabled=not emailable,
+        help="Instantly-format lead-import CSV (email, first_name, "
+             "last_name, company_name, hook, title). Only leads with a "
+             "real unlocked email are included — import it into Instantly / "
+             "Smartlead / Apollo. Works with zero API access.")
+    if not emailable:
+        st.caption("No leads with an unlocked email yet — add contacts on "
+                   "the queue/inbox cards or run enrichment.")
+with dc2:
+    adapter = C.active_email_adapter()
+    campaign = cfg.get("campaign_id", "") if has_cfg else ""
+    if adapter is None:
+        st.button("🔄 Sync replies", disabled=True, width="stretch",
+                  help="No email tool configured. Add INSTANTLY_API_KEY / "
+                       "SMARTLEAD_API_KEY / APOLLO_API_KEY to .env (see "
+                       "Help → Integrations) to enable reply syncing.")
+        st.caption("Reply sync is off — no API key set.")
+    else:
+        if st.button(f"🔄 Sync replies ({adapter.name})", width="stretch",
+                     help="Polls the email tool for replies and moves matched "
+                          "leads (by email) to the 'replied' stage. No "
+                          "sending happens. Uses this client's campaign id."):
+            summary = C.apply_replies(adapter, campaign or None)
+            if summary.get("error"):
+                st.error(f"Sync failed: {summary['error']}")
+            else:
+                C.push_toast(
+                    f"{summary.get('matched', 0)} reply(ies) synced "
+                    f"({summary.get('emails', 0)} found)", "🔄")
+                st.rerun()
+        st.caption(f"Campaign: `{campaign or '—'}`"
+                   + ("" if campaign else " (set one in Client Configs)"))

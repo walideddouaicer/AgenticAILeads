@@ -23,6 +23,10 @@ python prospector_engine.py --probe          # ALWAYS before the first real run
 python prospector_engine.py                  # Apollo -> prospects.csv
 python agency_discovery.py --from-prospects  # classify agency boards -> agency_watchlist.json
 python prospect_signal_engine.py             # mandate sweep -> prospect_signals.csv
+
+# delivery layer (email tools; all optional, no-op without keys)
+python delivery.py --probe                   # print requests each adapter WOULD send
+python delivery.py --sync-replies            # poll replies -> set stage 'replied'
 ```
 
 Verification (no pytest here — this is the house pattern):
@@ -31,6 +35,7 @@ Verification (no pytest here — this is the house pattern):
 python -m py_compile app.py common.py views/*.py   # must pass
 python app.py                                      # bare mode must exit 0
 python tests/test_units.py                         # classifier, niche derivation, Apollo parsing
+python tests/test_delivery.py                      # delivery adapters, mocked HTTP
 python tests/test_pages.py                         # all pages via AppTest, empty + populated data
 ```
 
@@ -63,6 +68,17 @@ Two layers connected only through data files in the repo root:
 `filter_engine.evaluate_job()` is the single matching implementation used
 by the sweep, the mini-list, and the config page's live tester/dry-run —
 change it in one place only.
+
+`delivery.py` is the channel-ready email layer: an adapter per tool
+(Manual/Instantly/Smartlead/ApolloSequences) with one shared
+`map_lead()` (email/first_name/company + custom `{hook}`/`{title}`). It is
+deliberately **Streamlit-free and common-free** (pure, CLI + unit
+testable); `common.py` imports it, never the reverse. Adapters read keys
+from `.env` and no-op when absent — nothing sends without a key AND a
+button press. `common.apply_replies()` maps replies to leads by email and
+advances only `new`/`contacted` → `replied`. Per-client `channel` and
+`campaign_id` are optional config fields defaulted in `common.load_profile`
+(filter_engine untouched — it ignores unknown keys).
 
 ### Data files — formats are FROZEN
 

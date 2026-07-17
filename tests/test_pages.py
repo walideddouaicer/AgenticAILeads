@@ -216,6 +216,36 @@ if INTERACT:
     check("profile delete requires typed confirmation",
           bool(dels) and all(b.disabled for b in dels))
 
+    # Delivery: channel field on configs, export button on queue/clients,
+    # sync-replies disabled when no adapter key is set
+    at = fresh("views/configs.py")
+    check("configs has delivery channel selector",
+          any("channel" in str(getattr(s, "label", "")).lower()
+              for s in at.selectbox))
+    at = fresh("views/queue.py")
+    check("queue has 'Export for email tool' button",
+          any("email tool" in str(getattr(b, "label", "")).lower()
+              for b in at.download_button))
+    at = fresh("views/clients.py")
+    check("client page has email-tool export",
+          any("email tool" in str(getattr(b, "label", "")).lower()
+              for b in at.download_button))
+    # fixture .env carries a (fake) APOLLO_API_KEY, so the Apollo sequences
+    # adapter is 'configured' and the sync button is enabled and named for
+    # it — confirms is_configured() gating drives the control.
+    sync_btns = [b for b in at.button
+                 if "sync replies" in str(getattr(b, "label", "")).lower()]
+    check("client page has a 'Sync replies' control", bool(sync_btns))
+    import delivery as _d
+    if _d.active_email_adapter(env_file=DATA / ".env"):
+        check("sync-replies enabled + adapter-named when key present",
+              sync_btns and not sync_btns[0].disabled
+              and _d.active_email_adapter(env_file=DATA / ".env").name
+              in sync_btns[0].label.lower())
+    else:
+        check("sync-replies disabled when no key",
+              sync_btns and sync_btns[0].disabled)
+
 print()
 if fails:
     print(f"{len(fails)} FAILURE(S):")

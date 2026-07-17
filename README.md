@@ -58,15 +58,37 @@ leads, touched-today and boards-watched counts.
 | **Clients → Mini-List** | The free gift list (CSV + branded HTML one-pager). |
 | **System → Watchlist** | Boards swept nightly: URL paste, bulk import, manual add, discovery run, search, bulk remove, live-job counts. |
 | **System → Live Jobs** | Every tracked job across all boards — search, platform/location filters, CSV export. |
-| **System → Client Configs** | Profiles with live tester, dry-run over tracked jobs, backfill, type-to-confirm delete. |
+| **System → Client Configs** | Profiles with live tester, dry-run over tracked jobs, backfill, type-to-confirm delete, and per-client delivery channel + email campaign id. |
 | **System → Help** | The full operating guide: pipeline diagram, per-page docs, glossary, daily routine, troubleshooting. Every page has a "?" popover linking to its section. |
+
+## Delivery layer (optional email tools)
+
+Outreach is manual by default — the app drafts, a human sends on LinkedIn.
+An email-sending tool (**Instantly**, **Smartlead**, or **Apollo email
+sequences**) can be plugged in later by adding **one API key to `.env`** — no
+code change. `delivery.py` holds an adapter per tool; each reports "not
+configured" and no-ops cleanly when its key is absent. **Nothing is ever sent
+automatically** — sending needs a configured key *and* a button press.
+
+- **Export for email tool** (Outreach Queue + Client Pages) — an
+  Instantly-format lead-import CSV (unlocked emails only); works today with
+  zero API access.
+- **Sync replies** (Client Pages) — polls the configured tool and moves
+  matched leads (by email) to the `replied` stage. Polling only, no webhooks.
+- Per-client **channel** (`linkedin`/`email`/`both`) + **campaign id** in
+  Client Configs; the channel shows as a badge on queue cards.
+- Verify vendor payloads before the first real send:
+  `python delivery.py --probe` (prints the exact requests, sends nothing).
+  Sync from the CLI with `python delivery.py --sync-replies`.
+
+See the app's **Help → Integrations** section for per-adapter setup, and
+`.env.example` for the key names.
 
 ## Setup
 
 ```bash
 pip install -r requirements.txt
-# create a file named .env next to app.py containing:
-#   APOLLO_API_KEY=your_key      (Apollo → Settings → Integrations → API, master enabled)
+cp .env.example .env   # then fill in the keys you have (all optional)
 ```
 
 ## Usage
