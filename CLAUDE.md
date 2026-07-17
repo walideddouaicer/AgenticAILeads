@@ -17,6 +17,12 @@ python signal_engine.py              # nightly sweep (--baseline on very first r
 python discovery_engine.py --hn 3    # grow watchlist from HN "Who is hiring" (--names file.txt also works)
 python enrichment_engine.py          # Apollo contact lookup (--probe COMPANY to verify API parsing first)
 python minilist_engine.py --prospect "Acme" --keywords "java, .net"   # prospect gift list
+
+# own-client prospecting (second pipeline)
+python prospector_engine.py --probe          # ALWAYS before the first real run
+python prospector_engine.py                  # Apollo -> prospects.csv
+python agency_discovery.py --from-prospects  # classify agency boards -> agency_watchlist.json
+python prospect_signal_engine.py             # mandate sweep -> prospect_signals.csv
 ```
 
 Verification (no pytest here — this is the house pattern):
@@ -24,6 +30,8 @@ Verification (no pytest here — this is the house pattern):
 ```powershell
 python -m py_compile app.py common.py views/*.py   # must pass
 python app.py                                      # bare mode must exit 0
+python tests/test_units.py                         # classifier, niche derivation, Apollo parsing
+python tests/test_pages.py                         # all pages via AppTest, empty + populated data
 ```
 
 For app testing use `streamlit.testing.v1.AppTest` with the `AAL_DATA_DIR`
@@ -69,6 +77,12 @@ Other local scripts depend on these exact shapes; do not change them:
 | `enriched_contacts.json` | `{company: [contacts]}` cache — companies never re-queried |
 | `configs/*.json` | one client profile per file; schema in `filter_engine.py` docstring |
 | `discovery_state.json` | dead-candidate cache, 90-day expiry |
+| `prospects.csv` | own-client prospects (prospector output + USER EDITS — engines only append, never rewrite) |
+| `prospects_seen.json` | prospector dedupe cache, keyed on LinkedIn URL (fallback agency+name) |
+| `agency_watchlist.json` | agency boards — NEVER merged into `watchlist.json`, never routed through client configs |
+| `prospect_signals_state.json` / `prospect_signals.csv` | mandate-sweep state + signals (`date,agency,mandate_title,location,url,hook`) |
+| `prospects_status.json` | prospect stages/notes/niche overrides (separate key space from `inbox_status.json`) |
+| `prospects_config.json` | prospect DM/follow-up/breakup templates (editable in-app) |
 
 ### Business rules — do not alter
 
@@ -103,6 +117,17 @@ Other local scripts depend on these exact shapes; do not change them:
   handle the undo snapshot and toast; don't write `inbox_status.json`
   directly from pages.
 
+### The two pipelines stay separate
+
+Leads (companies hiring → our clients' meetings) and prospects
+(recruitment agencies → OUR clients) never share files, watchlists,
+stages, or status keys. Prospect stages are `new → contacted → replied →
+call_booked → client_won` (+ dismissed) with the same follow-up timers;
+status helpers in `common.py` take a `path` argument
+(`C.PROSPECTS_STATUS`) — never write a prospect entry into
+`inbox_status.json` or vice versa. No LinkedIn automation anywhere: the
+app drafts, a human sends.
+
 ## Gotchas
 
 - `python app.py` must keep exiting 0 (the `runtime.exists()` guard at the
@@ -114,4 +139,10 @@ Other local scripts depend on these exact shapes; do not change them:
   the rest of the runtime data is gitignored.
 - On this machine git pushes need `http.sslBackend schannel` (already set
   repo-locally) because a TLS-inspecting proxy/AV breaks Git's bundled CA
-  store.
+  store. The Python equivalent: every networked engine calls
+  `tls_compat.enable_os_trust_store()` (uses the `truststore` package) —
+  keep that import in any new engine that makes HTTPS calls.
+- Apollo filter parameter names vary by plan: `prospector_engine.py --probe`
+  must be run (by the user, with the real key) before trusting a payload
+  change; `tests/test_units.py` auto-validates parsing against the saved
+  probe (`prospector_probe.json`) when it exists.

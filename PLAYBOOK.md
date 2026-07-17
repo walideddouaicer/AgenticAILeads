@@ -1,5 +1,5 @@
 # AGENTIC AI LEADS — PROJECT PLAYBOOK
-*Last updated: July 8, 2026. Give this file to any AI assistant to restore full project context.*
+*Last updated: July 17, 2026 (blocks 8–10: own-client prospecting machine). Give this file to any AI assistant to restore full project context.*
 
 ## The business
 
@@ -34,6 +34,9 @@
 | 5 | Delivery | Manual (LinkedIn) | Email automation waits for warmed domains (~day 45) |
 | 6 | Conversations & booking | Human forever | Co-founder handles replies (<2h during US/EU hours) + calls |
 | 7 | Tracking & reporting | ✅ | `leadgen-pipeline-tracker.xlsx` (Google Sheets) + inbox status in `app.py` |
+| 8 | Own-client prospecting (find agencies to sell to) | ✅ built, run `--probe` first | `prospector_engine.py` — Apollo api_search for founders/MDs/owners at 2–20-person staffing agencies (US/UK/FR) → `prospects.csv`; dedupe cache `prospects_seen.json` |
+| 9 | Agency mandate signals (hooks for OUR outreach) | ✅ built | `agency_discovery.py` (classify prospect boards → `agency_watchlist.json`, separate from client watchlist) + `prospect_signal_engine.py` (new posting on an agency board = "they just took a mandate" → `prospect_signals.csv`) |
+| 10 | Prospect CRM (DM drafts + one-click mini-list door-opener) | ✅ | app **Prospects** page — stages new→contacted→replied→call_booked→client_won, same day-3/breakup timers, templates in `prospects_config.json`, status in `prospects_status.json` |
 
 ## File inventory
 
