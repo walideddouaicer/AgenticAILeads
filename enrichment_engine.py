@@ -35,6 +35,10 @@ from pathlib import Path
 
 import requests
 
+from tls_compat import enable_os_trust_store
+
+enable_os_trust_store()
+
 HERE = Path(__file__).resolve().parent
 SIGNALS_CSV = HERE / "signals.csv"
 OUT_CSV = HERE / "enriched_signals.csv"
@@ -43,6 +47,17 @@ DOMAINS_FILE = HERE / "company_domains.json"
 ENV_FILE = HERE / ".env"
 
 API_URL = "https://api.apollo.io/api/v1/mixed_people/api_search"
+
+# Shared with prospector_engine.py — the same endpoint, the same failure mode.
+MASTER_KEY_HINT = (
+    "Most common cause: your key is a SCOPED key — this endpoint "
+    "requires a MASTER API key. Fix: Apollo -> Settings -> "
+    "Integrations -> API -> enable 'master API key' on your key "
+    "(or create a new one with master enabled), update .env, retry.\n"
+    "If the message says the endpoint isn't available on your plan, "
+    "people search via API may require a paid tier for your account "
+    "— fall back to manual Apollo UI searches (free credits) until "
+    "revenue funds the upgrade.")
 
 # Decision-maker titles for "company is hiring" signals: the people who own
 # hiring and would buy recruitment-agency services.
@@ -95,16 +110,8 @@ def search_company(api_key: str, company: str, domain: str | None):
         headers={"X-Api-Key": api_key, "Content-Type": "application/json",
                  "Cache-Control": "no-cache"})
     if r.status_code == 403:
-        sys.exit(
-            "403 from Apollo. Raw response:\n" + r.text[:800] + "\n\n"
-            "Most common cause: your key is a SCOPED key — this endpoint "
-            "requires a MASTER API key. Fix: Apollo -> Settings -> "
-            "Integrations -> API -> enable 'master API key' on your key "
-            "(or create a new one with master enabled), update .env, retry.\n"
-            "If the message says the endpoint isn't available on your plan, "
-            "people search via API may require a paid tier for your account "
-            "— fall back to manual Apollo UI searches (free credits) until "
-            "revenue funds the upgrade.")
+        sys.exit("403 from Apollo. Raw response:\n" + r.text[:800]
+                 + "\n\n" + MASTER_KEY_HINT)
     if r.status_code == 429:
         return "RATE_LIMITED", None
     r.raise_for_status()

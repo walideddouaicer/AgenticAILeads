@@ -19,6 +19,15 @@ enriched_contacts.json
 discovery_state.json
 .engine.lock
 
+# Own-client prospecting runtime data
+prospects.csv
+prospects_seen.json
+prospects_status.json
+prospect_signals.csv
+prospect_signals_state.json
+agency_discovery_state.json
+prospector_probe.json
+
 # Business tracker + office lock files
 *.xlsx
 .~lock.*

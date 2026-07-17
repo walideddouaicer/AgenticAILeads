@@ -28,6 +28,10 @@ from pathlib import Path
 
 import requests
 
+from tls_compat import enable_os_trust_store
+
+enable_os_trust_store()
+
 # Phase 3: per-client filtering. If filter_engine.py + configs/ exist,
 # every new job is routed through every active client profile.
 try:

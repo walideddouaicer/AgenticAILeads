@@ -43,6 +43,10 @@ from pathlib import Path
 
 import requests
 
+from tls_compat import enable_os_trust_store
+
+enable_os_trust_store()
+
 HERE = Path(__file__).resolve().parent
 WATCHLIST_FILE = HERE / "watchlist.json"
 STATE_FILE = HERE / "discovery_state.json"
