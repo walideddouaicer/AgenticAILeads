@@ -145,8 +145,10 @@ def outreach_card(row, kind, i):
             st.markdown(f"**{contact}** — {row.get('contact1_title','')}"
                         + (f" · [open LinkedIn ↗]({lk})" if lk else ""))
         else:
-            st.caption("No contact yet — run enrichment (Home page) or "
-                       "find them manually on LinkedIn.")
+            st.caption("No contact yet — find the decision-maker on "
+                       "LinkedIn and add them below (Apollo API enrichment "
+                       "is gated on the free plan).")
+        C.render_contact_editor(row, wkey)
         if row.get("url"):
             st.markdown(f"[job posting]({row['url']})")
 

@@ -154,6 +154,55 @@ if INTERACT:
         # render check above already covers the mini-list code path.
         pass
 
+    # Manual contact entry: invalid linkedin rejected, valid one saved
+    # into enriched_contacts.json under the card's company
+    at = fresh("views/queue.py")
+    name_inputs = [t for t in at.text_input if (t.key or "").startswith("mc_n_")]
+    check("manual contact form present", bool(name_inputs))
+    if name_inputs:
+        sfx = name_inputs[0].key[len("mc_n_"):]
+
+        def fill(link):
+            [t for t in at.text_input if t.key == f"mc_n_{sfx}"][0] \
+                .set_value("Test Person")
+            [t for t in at.text_input if t.key == f"mc_t_{sfx}"][0] \
+                .set_value("Head of Talent")
+            [t for t in at.text_input if t.key == f"mc_l_{sfx}"][0] \
+                .set_value(link)
+
+        cache_before = json.loads(
+            (DATA / "enriched_contacts.json").read_text())
+
+        fill("https://example.com/not-linkedin")
+        [b for b in at.button if b.key == f"mc_s_{sfx}"][0].click()
+        at.run()
+        cache_mid = json.loads((DATA / "enriched_contacts.json").read_text())
+        check("invalid linkedin URL rejected", cache_mid == cache_before,
+              "cache changed despite invalid URL")
+
+        name_inputs = [t for t in at.text_input if t.key == f"mc_n_{sfx}"]
+        if name_inputs:
+            fill("https://www.linkedin.com/in/test-person")
+            [b for b in at.button if b.key == f"mc_s_{sfx}"][0].click()
+            at.run()
+            cache_after = json.loads(
+                (DATA / "enriched_contacts.json").read_text())
+            gained = [co for co, cs in cache_after.items()
+                      if any(c.get("name") == "Test Person" for c in cs)]
+            check("manual contact saved to cache", len(gained) == 1,
+                  f"gained={gained}")
+            if gained:
+                entry = [c for c in cache_after[gained[0]]
+                         if c.get("name") == "Test Person"][0]
+                check("contact entry uses enrichment structure",
+                      set(entry) == {"name", "title", "linkedin", "email"},
+                      str(set(entry)))
+                # joined onto the company's leads after rerun
+                at2 = fresh("views/queue.py")
+                check("saved contact renders on rerun",
+                      any("Test Person" in str(m.value) for m in at2.markdown),
+                      "contact not visible on queue cards")
+
     # Watchlist search + bulk remove widgets
     at = fresh("views/watchlist.py")
     check("watchlist search present",

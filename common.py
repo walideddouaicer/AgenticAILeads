@@ -411,6 +411,120 @@ def mailto_link(email, subject, body):
     return f"mailto:{email}?subject={quote(subject)}&body={quote(body)}"
 
 
+# --------- manual contacts (Apollo API enrichment is plan-gated) ---------
+
+def load_contacts_cache():
+    """enriched_contacts.json — same file/format enrichment_engine writes:
+    {company: [{name, title, linkedin, email}]}."""
+    if CONTACTS_CACHE.exists():
+        try:
+            return json.loads(CONTACTS_CACHE.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def save_contacts_cache(cache):
+    CONTACTS_CACHE.write_text(json.dumps(cache, indent=2), encoding="utf-8")
+
+
+def render_contact_editor(row, wkey):
+    """Add / edit / remove a manually-found contact for this lead's company.
+
+    Writes enriched_contacts.json in the exact structure the enrichment
+    engine uses, so load_leads() picks the contact up on every lead of the
+    company automatically. Rendered as a popover because the lead cards are
+    already expanders (Streamlit forbids nesting them)."""
+    company = (row.get("company") or "").strip()
+    if not company:
+        return
+    existing_name = (row.get("contact1_name") or "").strip()
+    editing = bool(existing_name)
+    prefill_email = row.get("contact1_email", "") if editing else ""
+    if "locked" in prefill_email.lower():
+        prefill_email = ""
+
+    label = "✏️ Edit / remove contact" if editing else "➕ Add contact manually"
+    with st.popover(label,
+                    help="Contacts are stored per COMPANY in "
+                         "enriched_contacts.json — saving here updates "
+                         "every lead of this company."):
+        st.caption(f"Company: **{company}** — find the decision-maker on "
+                   "LinkedIn (head of talent / TA / founder) and paste "
+                   "their details.")
+        name = st.text_input("Name", existing_name, key=f"mc_n_{wkey}",
+                             help="Full name as shown on LinkedIn.")
+        title = st.text_input("Title",
+                              row.get("contact1_title", "") if editing else "",
+                              key=f"mc_t_{wkey}",
+                              help="Their job title, e.g. 'Head of Talent "
+                                   "Acquisition'.")
+        linkedin = st.text_input("LinkedIn URL",
+                                 row.get("contact1_linkedin", "") if editing
+                                 else "",
+                                 key=f"mc_l_{wkey}",
+                                 placeholder="https://www.linkedin.com/in/…",
+                                 help="Their profile URL — must contain "
+                                      "linkedin.com/.")
+        email = st.text_input("Email (optional)", prefill_email,
+                              key=f"mc_e_{wkey}",
+                              help="Only if you actually have it — LinkedIn "
+                                   "outreach doesn't need one.")
+
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("💾 Save contact", key=f"mc_s_{wkey}",
+                         type="primary", width="stretch",
+                         help="Saves to enriched_contacts.json; the contact "
+                              "appears on all of this company's leads."):
+                errs = []
+                if not name.strip():
+                    errs.append("Name is required.")
+                if not title.strip():
+                    errs.append("Title is required.")
+                if "linkedin.com/" not in linkedin.strip().lower():
+                    errs.append("LinkedIn URL must contain linkedin.com/.")
+                if errs:
+                    st.error(" ".join(errs))
+                else:
+                    cache = load_contacts_cache()
+                    entries = [c for c in (cache.get(company) or [])
+                               if isinstance(c, dict)]
+                    new = {"name": name.strip(), "title": title.strip(),
+                           "linkedin": linkedin.strip(),
+                           "email": email.strip()}
+                    idx = next(
+                        (i for i, c in enumerate(entries)
+                         if (c.get("name", "").strip().lower()
+                             == existing_name.lower())),
+                        None) if editing else None
+                    if idx is None:
+                        entries.append(new)
+                    else:
+                        entries[idx] = new
+                    cache[company] = entries
+                    save_contacts_cache(cache)
+                    push_toast(f"Contact saved for {company}", "👤")
+                    st.rerun()
+        with c2:
+            if editing and st.button(
+                    "🗑 Remove contact", key=f"mc_r_{wkey}", width="stretch",
+                    help="Deletes this contact from enriched_contacts.json "
+                         "(for every lead of this company)."):
+                cache = load_contacts_cache()
+                entries = [c for c in (cache.get(company) or [])
+                           if isinstance(c, dict)
+                           and c.get("name", "").strip().lower()
+                           != existing_name.lower()]
+                if entries:
+                    cache[company] = entries
+                else:
+                    cache.pop(company, None)
+                save_contacts_cache(cache)
+                push_toast(f"Contact removed from {company}", "🗑")
+                st.rerun()
+
+
 def mark_followed_up(status, key, lead_label: str = "", path=None):
     """Reset the follow-up timer and count the touch (day-3 -> day-6 -> stop)."""
     _snapshot_undo(status, key, f"follow-up on {lead_label}" if lead_label

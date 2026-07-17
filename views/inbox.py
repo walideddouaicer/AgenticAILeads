@@ -116,7 +116,10 @@ for offset, (row, key, entry, eff, due) in enumerate(chunk):
                         f"**Alt:** {row['contact2_name']} — {row.get('contact2_title','')} "
                         f"([LinkedIn]({row.get('contact2_linkedin','')}))")
             else:
-                st.caption("No contact yet — run enrichment from the Home page")
+                st.caption("No contact yet — find them on LinkedIn and add "
+                           "them below (Apollo API enrichment is gated on "
+                           "the free plan).")
+            C.render_contact_editor(row, wkey)
 
             notes = st.text_area("Notes", (entry or {}).get("notes", ""),
                                  height=80, key=f"nt_{wkey}",

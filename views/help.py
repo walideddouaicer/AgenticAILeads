@@ -119,6 +119,13 @@ Your daily working view. **Do follow-ups first, then new sends.**
   **💬 They replied** — moves the conversation to the Inbox.
 - **Double-DM guard** — if the same LinkedIn contact was already
   contacted for another client, the card shows a warning. Don't send.
+- **➕ Add contact manually / ✏️ Edit contact** — Apollo API enrichment
+  is gated on the free plan, so contacts are found by hand on LinkedIn.
+  The popover saves name / title / LinkedIn URL / optional email into
+  `enriched_contacts.json` under the company (same structure the
+  enrichment engine writes), so the contact appears on **every** lead
+  of that company, in the Inbox and mini-lists too. The LinkedIn URL
+  must contain `linkedin.com/`.
 - New sends are ranked: named contact first, then lead score, then
   freshness. Hooks older than {C.FRESH_DAYS} days automatically degrade
   from "just opened" to "currently hiring" wording.
@@ -136,6 +143,9 @@ Every signal ever captured, newest first, {25} per page.
   contact when enriched, **Notes** (saved with the lead, searchable on
   the client page), the editable **Draft DM** with a copy box, and a
   one-click **Compose email** link when a real address exists.
+- **➕ Add contact manually / ✏️ Edit contact** — same popover as the
+  Outreach Queue: saves per COMPANY into `enriched_contacts.json`, so
+  one save covers all of that company's leads.
 - **Mark contacted / Dismiss** on new leads; **Stage** dropdown +
   **Update stage** afterwards; **Followed up (reset timer)** while
   contacted.
