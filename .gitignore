@@ -28,6 +28,10 @@ prospect_signals_state.json
 agency_discovery_state.json
 prospector_probe.json
 
+# Generated test data
+tests/fixture_data/
+tests/empty_data/
+
 # Business tracker + office lock files
 *.xlsx
 .~lock.*

@@ -141,6 +141,47 @@ Every signal ever captured, newest first, {25} per page.
   contacted.
 """)
 
+with section("prospects", "🧲 Page guide — Prospects"):
+    st.markdown(f"""
+OUR pipeline — recruitment agencies we want as clients. Completely
+separate from the lead pipeline: its own data files
+(`prospects.csv`, `prospect_signals.csv`, `prospects_status.json`,
+`agency_watchlist.json`), its own stages, no overlap with client
+configs.
+
+**The three engines** (buttons at the top of the page):
+- **Prospector** — Apollo search for founders/MDs/owners at small
+  (2–20 person) recruitment agencies in US/UK/FR. Appends to
+  `prospects.csv`; never overwrites your edits; dedupes across runs.
+  ⚠️ Run `python prospector_engine.py --probe` in a terminal ONCE
+  before the first real run — it prints the exact payload and raw
+  response so you can verify which filters your Apollo plan accepts.
+- **Agency board discovery** — probes your prospects' agency names
+  across Greenhouse/Lever/Ashby/Workable and saves boards classified
+  as agencies (name markers like *staffing/recruit/talent*, or an
+  "agency book" posting pattern) to `agency_watchlist.json`.
+- **Mandate sweep** — diffs agency boards nightly-style; each new
+  posting = "this agency just took a mandate" = the freshest possible
+  hook ("saw you're working a {{title}} mandate…").
+
+**Stages:** new → contacted → replied → **call booked** → **client
+won** (+ dismissed), with the same day-{C.FOLLOWUP_DAYS} /
+day-{C.FOLLOWUP_DAYS * 2} breakup follow-up timers as leads.
+Follow-ups due always come first.
+
+**Each card:** person + LinkedIn, agency, the best available hook
+(fresh mandate > niche fallback > warning — no hook = don't send), a
+DM drafted from the prospect templates (editable in the ✍️ expander),
+and:
+
+- **Niche keywords** — auto-derived from the agency's mandate titles;
+  edit + Save to override (persisted per prospect).
+- **🎁 One-click mini-list** — builds "10 companies hiring exactly
+  what you place" from YOUR tracked jobs using those keywords, with
+  CSV + branded HTML downloads right on the card. This is the
+  door-opener: attach it, then "want 50 more per week?".
+""")
+
 with section("clients", "👤 Page guide — Client Pages"):
     st.markdown("""
 - Pick a client to see their header (label, active/paused, meeting
@@ -238,6 +279,8 @@ with section("glossary", "📚 Glossary"):
 | **backfill** | Seeding a new client with today's *live* matches instead of waiting for future diffs (Client Configs → dry run → Backfill). |
 | **mini-list** | The free "10 companies hiring in your niche" gift list for a prospect agency — the door-opener. |
 | **breakup follow-up** | Follow-up #{C.MAX_FOLLOWUPS} — the last touch ("last note from me…"). After it, the lead stops appearing in the queue. |
+| **prospect** | A recruitment agency (and its decision-maker) that WE want as a client. Lives in `prospects.csv`, worked on the Prospects page. |
+| **mandate** | A role a recruitment agency is filling for ITS client — visible as a posting on the agency's own ATS board. A new mandate = a prospect signal = our hook. |
 """)
 
 # ------------------------------------------------------------------ (d)

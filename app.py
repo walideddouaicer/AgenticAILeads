@@ -13,6 +13,8 @@ Pages:
                      one-click copy / mark contacted, double-DM guard
     Daily Inbox    — all signals -> DMs -> stages (contacted/replied/won),
                      notes, dismiss, follow-up timers, 25/page
+    Prospects      — OUR pipeline: agency decision-makers (prospector),
+                     mandate hooks, per-prospect mini-list door-opener
   Clients
     Client Pages   — per-client leads, filters, metrics, CSV export
     Mini-List      — free gift list for prospect agencies (CSV + HTML)
@@ -47,6 +49,7 @@ def main():
         "Work": [
             st.Page("views/queue.py", title="Outreach Queue", icon="🚀"),
             st.Page("views/inbox.py", title="Daily Inbox", icon="📥"),
+            st.Page("views/prospects.py", title="Prospects", icon="🧲"),
         ],
         "Clients": [
             st.Page("views/clients.py", title="Client Pages", icon="👤"),

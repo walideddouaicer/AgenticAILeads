@@ -49,6 +49,13 @@ WATCHLIST_FILE = DATA_DIR / "watchlist.json"
 DISCOVERY_STATE = DATA_DIR / "discovery_state.json"
 ENV_FILE = DATA_DIR / ".env"
 
+# --- own-client prospecting (separate pipeline, separate files) ---
+PROSPECTS_CSV = DATA_DIR / "prospects.csv"
+PROSPECT_SIGNALS_CSV = DATA_DIR / "prospect_signals.csv"
+PROSPECTS_STATUS = DATA_DIR / "prospects_status.json"
+PROSPECTS_CONFIG = DATA_DIR / "prospects_config.json"
+AGENCY_WATCHLIST_FILE = DATA_DIR / "agency_watchlist.json"
+
 DEFAULT_TEMPLATE = (
     "Hi {first_name} — {hook}. Roles like that are exactly what we place. "
     "Worth a quick chat about how we can help you fill them faster?"
@@ -79,6 +86,28 @@ STAGES = ["contacted", "replied", "won"]
 # legacy stage names from earlier versions -> current
 LEGACY_MAP = {"call booked": "replied", "showed": "won", "snoozed": "new"}
 
+# prospect pipeline stages (OUR outreach to agencies) — distinct from leads
+PROSPECT_STAGES = ["contacted", "replied", "call_booked", "client_won"]
+
+DEFAULT_PROSPECT_DM = (
+    "Hi {first_name} — {hook}. We run signal-based outbound for recruitment "
+    "agencies: we find companies actively hiring in your niche and book "
+    "direct-client meetings with the decision-makers. You pay per meeting "
+    "that actually happens — first one free so you can judge the quality "
+    "yourself. Worth a 15-minute call?"
+)
+DEFAULT_PROSPECT_FOLLOWUP = (
+    "Hi {first_name} — floating this back up. {hook} — happy to send a free "
+    "sample first: 10 companies hiring exactly what you place, with the "
+    "decision-maker contacts. Pay per showed meeting, first one free. "
+    "Want the list?"
+)
+DEFAULT_PROSPECT_FOLLOWUP2 = (
+    "Hi {first_name} — last note from me. If direct-client acquisition ever "
+    "becomes a priority: we book the meetings, you pay only when they show, "
+    "first one free. Door's open."
+)
+
 PLATFORMS = ["greenhouse", "lever", "ashby", "workable"]
 
 # App-wide stage colors (also the badge palette; keep in sync with Help page)
@@ -88,6 +117,9 @@ STAGE_COLORS = {
     "replied": "#F5A623",
     "won": "#3CB371",
     "dismissed": "#999999",
+    # prospect-only stages
+    "call_booked": "#7A5FD0",
+    "client_won": "#3CB371",
 }
 # light backgrounds get dark text, the rest white
 _BADGE_FG = {"new": "#111111", "replied": "#111111"}
@@ -138,7 +170,8 @@ def stage_badge(stage: str, due: bool = False) -> str:
     """Colored HTML badge for a stage; render with unsafe_allow_html=True."""
     bg = STAGE_COLORS.get(stage, "#999999")
     fg = _BADGE_FG.get(stage, "#ffffff")
-    out = f'<span class="aal-badge" style="background:{bg};color:{fg}">{stage}</span>'
+    label = stage.replace("_", " ")
+    out = f'<span class="aal-badge" style="background:{bg};color:{fg}">{label}</span>'
     if due:
         out += ('<span class="aal-badge" style="background:#111111;'
                 'color:#D8FF3E">follow-up due</span>')
@@ -158,12 +191,13 @@ def flush_toasts():
         st.toast(msg, icon=icon)
 
 
-def _snapshot_undo(status: dict, key: str, label: str):
+def _snapshot_undo(status: dict, key: str, label: str, path=None):
     prev = status.get(key)
     st.session_state["_undo"] = {
         "key": key,
         "prev": dict(prev) if isinstance(prev, dict) else prev,
         "label": label,
+        "path": str(path or INBOX_STATUS),
     }
 
 
@@ -172,16 +206,18 @@ def undo_available():
 
 
 def undo_last():
-    """Restore the status entry saved before the last stage change."""
+    """Restore the status entry saved before the last stage change
+    (works for both the lead and the prospect status files)."""
     u = st.session_state.pop("_undo", None)
     if not u:
         return None
-    status = load_status()
+    path = Path(u.get("path") or INBOX_STATUS)
+    status = load_status(path)
     if u["prev"] is None:
         status.pop(u["key"], None)
     else:
         status[u["key"]] = u["prev"]
-    save_status(status)
+    save_status(status, path)
     return u["label"]
 
 
@@ -289,12 +325,14 @@ def load_leads():
     return rows, label
 
 
-def load_status():
-    """{lead_key: {'status': str, 'on': iso, 'notes': str}} — migrates all
-    earlier formats (plain string, legacy stage names, snooze fields)."""
-    if not INBOX_STATUS.exists():
+def load_status(path=None):
+    """{key: {'status': str, 'on': iso, 'notes': str}} — migrates all
+    earlier formats (plain string, legacy stage names, snooze fields).
+    Default file is the lead inbox; pass PROSPECTS_STATUS for prospects."""
+    path = path or INBOX_STATUS
+    if not path.exists():
         return {}
-    raw = json.loads(INBOX_STATUS.read_text())
+    raw = json.loads(path.read_text())
     out = {}
     for k, v in raw.items():
         if isinstance(v, str):
@@ -307,8 +345,8 @@ def load_status():
     return out
 
 
-def save_status(status):
-    INBOX_STATUS.write_text(json.dumps(status, indent=1))
+def save_status(status, path=None):
+    (path or INBOX_STATUS).write_text(json.dumps(status, indent=1))
 
 
 def effective_status(entry) -> str:
@@ -373,31 +411,138 @@ def mailto_link(email, subject, body):
     return f"mailto:{email}?subject={quote(subject)}&body={quote(body)}"
 
 
-def mark_followed_up(status, key, lead_label: str = ""):
+def mark_followed_up(status, key, lead_label: str = "", path=None):
     """Reset the follow-up timer and count the touch (day-3 -> day-6 -> stop)."""
     _snapshot_undo(status, key, f"follow-up on {lead_label}" if lead_label
-                   else "follow-up")
+                   else "follow-up", path)
     e = status.get(key, {"status": "contacted", "on": "", "notes": ""})
     e["on"] = date.today().isoformat()
     e["fu"] = int(e.get("fu", 0) or 0) + 1
     status[key] = e
-    save_status(status)
+    save_status(status, path)
     push_toast(f"Follow-up #{e['fu']} logged"
                + (f" — {lead_label}" if lead_label else ""), "🔁")
 
 
-def set_stage(status, key, stage, notes=None, lead_label: str = ""):
-    _snapshot_undo(status, key, f"{lead_label or 'lead'} → {stage}")
+def set_stage(status, key, stage, notes=None, lead_label: str = "", path=None):
+    _snapshot_undo(status, key, f"{lead_label or 'lead'} → {stage}", path)
     entry = status.get(key, {"status": "new", "on": "", "notes": ""})
     entry["status"] = stage
     entry["on"] = date.today().isoformat()
     if notes is not None:
         entry["notes"] = notes
     status[key] = entry
-    save_status(status)
-    icons = {"contacted": "✅", "replied": "💬", "won": "🏆", "dismissed": "🚫"}
-    push_toast((f"{lead_label} → {stage}" if lead_label else f"Stage → {stage}"),
+    save_status(status, path)
+    icons = {"contacted": "✅", "replied": "💬", "won": "🏆", "dismissed": "🚫",
+             "call_booked": "📅", "client_won": "🎉"}
+    push_toast((f"{lead_label} → {stage.replace('_', ' ')}" if lead_label
+                else f"Stage → {stage.replace('_', ' ')}"),
                icons.get(stage, "✅"))
+
+
+# ============================ prospects (our own clients) ============================
+
+def load_prospects():
+    """Rows from prospects.csv (prospector_engine output + user edits)."""
+    if not PROSPECTS_CSV.exists():
+        return []
+    return list(csv.DictReader(PROSPECTS_CSV.open(encoding="utf-8")))
+
+
+def load_prospect_signals():
+    """Rows from prospect_signals.csv (mandate sweep output), newest first."""
+    if not PROSPECT_SIGNALS_CSV.exists():
+        return []
+    rows = list(csv.DictReader(PROSPECT_SIGNALS_CSV.open(encoding="utf-8")))
+    rows.sort(key=lambda r: r.get("date", ""), reverse=True)
+    return rows
+
+
+def prospect_key(row):
+    """Stable key for prospects_status.json: LinkedIn URL when present,
+    else agency+person name — never collides with lead_key space because
+    it lives in a separate file."""
+    lk = (row.get("linkedin") or "").strip().lower().rstrip("/")
+    raw = lk or (f"{(row.get('agency') or '').strip().lower()}"
+                 f"|{(row.get('person_name') or '').strip().lower()}")
+    return hashlib.md5(raw.encode()).hexdigest()[:12]
+
+
+def mandates_for_agency(agency_name, signals):
+    """prospect_signals rows for one agency, fuzzy-matched on the
+    normalized (slugged) agency name vs the board token, newest first."""
+    from discovery_engine import slug_variants
+    variants = slug_variants(agency_name)
+    if not variants:
+        return []
+    hits = [s for s in signals if s.get("agency") in variants]
+    if not hits:
+        hits = [s for s in signals
+                if any(v in (s.get("agency") or "") or (s.get("agency") or "") in v
+                       for v in variants)]
+    return hits
+
+
+_NICHE_STOPWORDS = {
+    "a", "an", "the", "and", "or", "of", "for", "with", "to", "in", "at",
+    "on", "sr", "jr", "senior", "junior", "lead", "principal", "staff",
+    "head", "chief", "manager", "director", "vp", "intern", "graduate",
+    "trainee", "assistant", "associate", "specialist", "coordinator",
+    "executive", "officer", "remote", "hybrid", "onsite", "on-site",
+    "contract", "permanent", "freelance", "temporary", "temp", "part",
+    "full", "time", "fte", "i", "ii", "iii", "iv", "v", "m", "f", "d",
+    "x", "new", "urgent", "immediate", "role", "position", "job", "jobs",
+    "month", "months", "year", "years", "all", "levels", "level",
+}
+
+
+def derive_niche_keywords(titles, top_n=5):
+    """Most frequent meaningful role keywords across mandate titles —
+    the automatic niche guess for a prospect's mini-list."""
+    from collections import Counter
+    c = Counter()
+    for t in titles:
+        for w in re.findall(r"[a-z0-9.+#]+", str(t or "").lower()):
+            w = w.strip(".")
+            if not w or w.isdigit() or len(w) < 2 or w in _NICHE_STOPWORDS:
+                continue
+            c[w] += 1
+    return [w for w, _ in c.most_common(top_n)]
+
+
+def load_prospects_config():
+    """Prospect DM templates (first touch / follow-up / breakup) —
+    editable on the Prospects page, stored in prospects_config.json."""
+    cfg = {}
+    if PROSPECTS_CONFIG.exists():
+        try:
+            cfg = json.loads(PROSPECTS_CONFIG.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            cfg = {}
+    cfg.setdefault("dm_template", DEFAULT_PROSPECT_DM)
+    cfg.setdefault("followup_template", DEFAULT_PROSPECT_FOLLOWUP)
+    cfg.setdefault("followup2_template", DEFAULT_PROSPECT_FOLLOWUP2)
+    return cfg
+
+
+def save_prospects_config(cfg):
+    PROSPECTS_CONFIG.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+
+
+def render_prospect_dm(template, prospect, hook):
+    contact = prospect.get("person_name", "")
+    first = contact.split()[0] if contact else "there"
+    fields = {
+        "first_name": first,
+        "agency": prospect.get("agency", ""),
+        "hook": hook,
+        "person_title": prospect.get("person_title", ""),
+        "location": prospect.get("location", ""),
+    }
+    try:
+        return template.format(**fields)
+    except (KeyError, IndexError, ValueError):
+        return template
 
 
 # ============================ watchlist ============================
@@ -477,6 +622,21 @@ ENGINES = {
         "label": "Discovery (discovery_engine.py)",
         "script": "discovery_engine.py",
         "icon": "🌱",
+    },
+    "prospector": {
+        "label": "Prospector (prospector_engine.py)",
+        "script": "prospector_engine.py",
+        "icon": "🧲",
+    },
+    "agency_discover": {
+        "label": "Agency board discovery (agency_discovery.py)",
+        "script": "agency_discovery.py",
+        "icon": "🏢",
+    },
+    "prospect_sweep": {
+        "label": "Mandate sweep (prospect_signal_engine.py)",
+        "script": "prospect_signal_engine.py",
+        "icon": "📌",
     },
 }
 
@@ -650,6 +810,9 @@ PAGE_BLURBS = {
              "Sent. Focus mode walks you through one card at a time.",
     "inbox": "Every signal ever captured, with stage, notes and DM drafts. "
              "Use it to manage conversations after the first touch.",
+    "prospects": "OUR pipeline: recruitment agencies we want as clients. "
+                 "Found by the prospector, hooked by their fresh mandates, "
+                 "armed with a one-click mini-list per prospect.",
     "clients": "Per-client lead list, metrics and the billable total; "
                "export any filtered view as a client report CSV.",
     "minilist": "Builds the free 'companies hiring in your niche' gift list "

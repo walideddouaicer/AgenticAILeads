@@ -1,0 +1,40 @@
+{
+  "_comment": "Synthetic Apollo api_search response mirroring the shape enrichment_engine.py already parses in production. tests/test_units.py automatically switches to the REAL prospector_probe.json (repo root) once `python prospector_engine.py --probe` has been run.",
+  "pagination": {"page": 1, "per_page": 5, "total_entries": 2, "total_pages": 1},
+  "people": [
+    {
+      "id": "p1",
+      "first_name": "Rita",
+      "last_name": "Patel",
+      "name": "Rita Patel",
+      "title": "Founder",
+      "linkedin_url": "https://www.linkedin.com/in/ritapatel",
+      "email": "email_not_unlocked@domain.com",
+      "city": "London",
+      "state": null,
+      "country": "United Kingdom",
+      "organization": {
+        "id": "o1",
+        "name": "Nimbus Staffing",
+        "estimated_num_employees": 8,
+        "industry": "staffing and recruiting"
+      }
+    }
+  ],
+  "contacts": [
+    {
+      "id": "c1",
+      "first_name": "Marc",
+      "last_name": "Dubois",
+      "title": "Managing Director",
+      "linkedin_url": "https://www.linkedin.com/in/marcdubois",
+      "email": "marc@talentbridge.example",
+      "city": "Paris",
+      "country": "France",
+      "account": {
+        "name": "TalentBridge Search",
+        "estimated_num_employees": 12
+      }
+    }
+  ]
+}
