@@ -1,16 +1,25 @@
-# Agentic AI Leads — brand theme (acid lime on light, dark sidebar)
+# Agentic AI Leads — editorial-brutalist theme (paper/ink, coral-red accent)
+# Type + palette follow the STITCH design system (Archivo / Fraunces /
+# JetBrains Mono; paper #F4F2EC, ink #0A0A0A, accent #D14829). The font
+# faces are loaded by the @import in common.inject_css().
 [theme]
 base = "light"
-primaryColor = "#D8FF3E"
-backgroundColor = "#FCFCFB"
-secondaryBackgroundColor = "#F2F2EE"
-textColor = "#111111"
+primaryColor = "#D14829"
+backgroundColor = "#F4F2EC"
+secondaryBackgroundColor = "#EAE7DD"
+textColor = "#0A0A0A"
+borderColor = "#0A0A0A"
+baseRadius = "none"
+font = "Archivo, sans-serif"
+headingFont = "Archivo, sans-serif"
+codeFont = "JetBrains Mono, monospace"
 
 [theme.sidebar]
-backgroundColor = "#111111"
-secondaryBackgroundColor = "#1D1D1B"
-textColor = "#FAFAF5"
-primaryColor = "#D8FF3E"
+backgroundColor = "#0A0A0A"
+secondaryBackgroundColor = "#1A1A1A"
+textColor = "#F4F2EC"
+primaryColor = "#D14829"
+borderColor = "#3D3D3D"
 
 [server]
 runOnSave = true

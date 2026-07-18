@@ -44,9 +44,11 @@ A second, fully separate pipeline that finds recruitment agencies to sell to:
 ## The CRM (`streamlit run app.py`)
 
 Multipage app (`st.navigation`); `app.py` is the entry point, pages live in
-`views/`, shared helpers in `common.py`, brand theme in
-`.streamlit/config.toml`. The sidebar always shows follow-ups due, new
-leads, touched-today and boards-watched counts.
+`views/`, shared helpers in `common.py`, theme in `.streamlit/config.toml`
+(editorial-brutalist: paper `#F4F2EC` / ink `#0A0A0A` / coral-red `#D14829`
+accent, Archivo + JetBrains Mono, square corners, hard-shadow hovers). The
+sidebar always shows follow-ups due, new leads, touched-today and
+boards-watched counts.
 
 | Page | What it does |
 |---|---|

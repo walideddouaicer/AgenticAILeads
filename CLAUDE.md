@@ -123,6 +123,11 @@ Other local scripts depend on these exact shapes; do not change them:
 - Stage colors app-wide (badges, funnel): new `#D8FF3E`, contacted
   `#4A90D9`, replied `#F5A623`, won `#3CB371`, dismissed `#999999` —
   always paired with the stage name as text, never color alone.
+- Theme is editorial-brutalist (STITCH design system): paper `#F4F2EC`,
+  ink `#0A0A0A`, accent `#D14829`, Archivo/JetBrains Mono, square
+  corners (`baseRadius = "none"`), 1.5px ink borders, hard offset
+  shadows. Tokens live in `.streamlit/config.toml` + `common._CSS`
+  (`--aal-*` variables) — change them there, not per-page.
 - Every input gets a `help=` tooltip; every page starts with
   `C.page_header(title, page_key)` (the "?" popover jumps to the Help
   section via the `help_jump` session key); every empty state names the

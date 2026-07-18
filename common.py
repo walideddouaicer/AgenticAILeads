@@ -125,45 +125,165 @@ STAGE_COLORS = {
 # light backgrounds get dark text, the rest white
 _BADGE_FG = {"new": "#111111", "replied": "#111111"}
 
-# outreach channel (per-client) — badge palette
+# outreach channel (per-client) — badge palette (amber = the theme's
+# highlight color; ink = both channels at once)
 CHANNELS = ["linkedin", "email", "both"]
-CHANNEL_COLORS = {"linkedin": "#4A90D9", "email": "#D8FF3E", "both": "#7A5FD0"}
+CHANNEL_COLORS = {"linkedin": "#4A90D9", "email": "#F2B705", "both": "#0A0A0A"}
 _CHANNEL_FG = {"email": "#111111"}
 
 
 # ============================ look & feel ============================
 
+# Editorial-brutalist skin (STITCH design system): Archivo display type,
+# JetBrains Mono eyebrows, paper/ink palette, coral-red accent, square
+# corners, 1.5px ink borders, hard offset shadows, paper grain.
 _CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap');
-h1, h2, h3, h4, h5,
-[data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2,
+@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800;900&family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,700;1,9..144,400&family=JetBrains+Mono:wght@400;500;700&display=swap');
+
+:root {
+    --aal-ink: #0A0A0A;
+    --aal-paper: #F4F2EC;
+    --aal-paper-2: #EAE7DD;
+    --aal-line: rgba(10,10,10,0.12);
+    --aal-line-strong: rgba(10,10,10,0.28);
+    --aal-muted: rgba(10,10,10,0.56);
+    --aal-accent: #D14829;
+}
+
+/* paper grain over the main canvas */
+.stApp::after {
+    content: '';
+    position: fixed; inset: 0;
+    z-index: 999990;
+    pointer-events: none;
+    opacity: 0.05;
+    mix-blend-mode: multiply;
+    background-image: url("data:image/svg+xml;utf8,<svg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.9 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+}
+
+/* display headings: heavy, tight */
+h1, h2, h3 {
+    font-family: 'Archivo', 'Helvetica Neue', sans-serif !important;
+    font-weight: 900 !important;
+    letter-spacing: -0.03em !important;
+    line-height: 1.02 !important;
+}
+h1 { border-bottom: 1.5px solid var(--aal-ink); padding-bottom: 10px; }
+[data-testid="stSidebar"] h1 { border-bottom: none; }
+
+/* mono eyebrows: captions + metric labels */
+[data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p {
+    font-family: 'JetBrains Mono', monospace !important;
+    font-size: 0.72rem !important;
+    letter-spacing: 0.04em;
+}
+[data-testid="stMetricLabel"], [data-testid="stMetricLabel"] p {
+    font-family: 'JetBrains Mono', monospace !important;
+    font-size: 0.68rem !important;
+    letter-spacing: 0.14em !important;
+    text-transform: uppercase;
+}
 [data-testid="stMetricValue"] {
-    font-family: 'Space Grotesk', 'Source Sans Pro', sans-serif !important;
+    font-family: 'Archivo', sans-serif !important;
+    font-weight: 900 !important;
+    letter-spacing: -0.03em;
+}
+
+/* buttons: square, uppercase display type, hard-shadow hover */
+.stButton button, .stDownloadButton button, [data-testid="stPopover"] > button {
+    border-radius: 0 !important;
+    font-family: 'Archivo', sans-serif !important;
+    font-weight: 700 !important;
+    font-size: 12px !important;
+    letter-spacing: 0.08em !important;
+    text-transform: uppercase;
+    transition: transform 0.08s, box-shadow 0.15s, background 0.15s !important;
+}
+.stButton button[kind="secondary"], .stDownloadButton button {
+    border: 1.5px solid var(--aal-ink) !important;
+    color: var(--aal-ink);
+    background: transparent;
+}
+.stButton button[kind="secondary"]:hover:enabled,
+.stDownloadButton button:hover:enabled {
+    background: var(--aal-ink) !important;
+    color: var(--aal-paper) !important;
+    box-shadow: 4px 4px 0 var(--aal-accent);
+}
+.stButton button[kind="primary"] {
+    border: 1.5px solid var(--aal-accent) !important;
+    color: #F4F2EC !important;
+}
+.stButton button[kind="primary"]:hover:enabled {
+    box-shadow: 4px 4px 0 var(--aal-ink);
+}
+.stButton button:active:enabled { transform: translate(2px, 2px); box-shadow: none !important; }
+
+/* expanders: panels with ink borders */
+[data-testid="stExpander"] {
+    border: 1.5px solid var(--aal-ink) !important;
+    border-radius: 0 !important;
+    background: var(--aal-paper);
+}
+[data-testid="stExpander"] summary {
+    font-family: 'Archivo', sans-serif !important;
+    font-weight: 700 !important;
     letter-spacing: -0.01em;
 }
-/* primary buttons: dark text on the acid-lime primary color */
-button[kind="primary"], button[kind="primaryFormSubmit"] {
-    color: #111111 !important;
-    font-weight: 600;
+[data-testid="stSidebar"] [data-testid="stExpander"] { border-color: rgba(244,242,236,0.25) !important; }
+
+/* code blocks (DM drafts, engine logs) */
+[data-testid="stCode"] pre, .stCode pre {
+    background: var(--aal-paper-2) !important;
+    border: 1px solid var(--aal-line-strong) !important;
+    border-radius: 0 !important;
 }
+
+/* sidebar nav: uppercase display labels, mono group headers */
+[data-testid="stSidebarNav"] a span {
+    font-family: 'Archivo', sans-serif !important;
+    font-weight: 700 !important;
+    font-size: 12px !important;
+    letter-spacing: 0.1em !important;
+    text-transform: uppercase;
+}
+[data-testid="stSidebarNav"] header,
+[data-testid="stSidebarNavSeparator"] + div,
+[data-testid="stNavSectionHeader"] {
+    font-family: 'JetBrains Mono', monospace !important;
+    font-size: 0.62rem !important;
+    letter-spacing: 0.22em !important;
+    text-transform: uppercase;
+    color: rgba(244,242,236,0.45) !important;
+}
+
+/* stage / channel badges: square rubberstamp tags */
 .aal-badge {
     display: inline-block;
-    padding: 1px 9px;
-    border-radius: 9px;
-    font-size: 0.72rem;
-    font-weight: 600;
-    letter-spacing: .02em;
+    padding: 2px 8px;
+    border-radius: 0;
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
     margin-right: 5px;
     white-space: nowrap;
-    font-family: 'Space Grotesk', sans-serif;
+    font-family: 'JetBrains Mono', monospace;
+    border: 1px solid rgba(10,10,10,0.25);
 }
-.aal-funnel-row { display: flex; align-items: center; margin: 4px 0; }
-.aal-funnel-label { width: 92px; font-size: 0.82rem; color: #444; }
-.aal-funnel-track { flex: 1; background: #F2F2EE; border-radius: 4px; }
-.aal-funnel-bar { height: 20px; border-radius: 4px; min-width: 2px; }
-.aal-funnel-count { width: 56px; text-align: right; font-size: 0.85rem;
-                    font-weight: 600; color: #111; padding-left: 8px; }
+
+/* funnel: flat bars on a paper-2 track, mono labels */
+.aal-funnel-row { display: flex; align-items: center; margin: 5px 0; }
+.aal-funnel-label { width: 108px; font-family: 'JetBrains Mono', monospace;
+                    font-size: 0.68rem; letter-spacing: 0.1em;
+                    text-transform: uppercase; color: var(--aal-muted); }
+.aal-funnel-track { flex: 1; background: var(--aal-paper-2);
+                    border: 1px solid var(--aal-line); }
+.aal-funnel-bar { height: 20px; min-width: 2px; }
+.aal-funnel-count { width: 56px; text-align: right;
+                    font-family: 'Archivo', sans-serif; font-size: 0.9rem;
+                    font-weight: 900; color: var(--aal-ink); padding-left: 8px; }
 </style>
 """
 
