@@ -35,3 +35,6 @@ tests/empty_data/
 # Business tracker + office lock files
 *.xlsx
 .~lock.*
+
+# App guide is shared directly, not via the repo
+AgenticAILeads_App_Guide.pdf
