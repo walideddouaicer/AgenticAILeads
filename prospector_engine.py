@@ -40,6 +40,7 @@ Setup: same .env as enrichment_engine.py (APOLLO_API_KEY=..., master key).
 import argparse
 import csv
 import json
+import os
 import sys
 import time
 from datetime import date
@@ -53,8 +54,9 @@ from tls_compat import enable_os_trust_store
 enable_os_trust_store()
 
 HERE = Path(__file__).resolve().parent
-PROSPECTS_CSV = HERE / "prospects.csv"
-SEEN_FILE = HERE / "prospects_seen.json"
+DATA_DIR = Path(os.environ.get("AAL_DATA_DIR", HERE))
+PROSPECTS_CSV = DATA_DIR / "prospects.csv"
+SEEN_FILE = DATA_DIR / "prospects_seen.json"
 PROBE_FILE = HERE / "prospector_probe.json"
 
 DEFAULT_TITLES = ["founder", "co-founder", "managing director", "owner",

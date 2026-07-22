@@ -1,0 +1,35 @@
+# Keep the image small and never bake local runtime data into it.
+# NOTE: watchlist.json and configs/ are intentionally NOT ignored — the
+# entrypoint seeds them onto the persistent volume on first boot.
+.git
+.gitignore
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
+.streamlit/secrets.toml
+.env
+.engine.lock
+
+# Runtime data files (regenerated on the volume; not needed in the image)
+signals.csv
+enriched_signals.csv
+signals_state.json
+inbox_status.json
+discovery_state.json
+enriched_contacts.json
+company_domains.json
+prospects.csv
+prospects_seen.json
+prospect_signals.csv
+prospect_signals_state.json
+prospects_status.json
+prospects_config.json
+agency_watchlist.json
+agency_discovery_state.json
+prospector_probe.json
+minilists/
+
+# Docs/build artifacts not needed at runtime
+DEPLOY.pdf

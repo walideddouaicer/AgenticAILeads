@@ -29,6 +29,7 @@ match quality a lot:  {"gitlab": "gitlab.com", "huggingface": "huggingface.co"}
 import argparse
 import csv
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -40,10 +41,11 @@ from tls_compat import enable_os_trust_store
 enable_os_trust_store()
 
 HERE = Path(__file__).resolve().parent
-SIGNALS_CSV = HERE / "signals.csv"
-OUT_CSV = HERE / "enriched_signals.csv"
-CACHE_FILE = HERE / "enriched_contacts.json"
-DOMAINS_FILE = HERE / "company_domains.json"
+DATA_DIR = Path(os.environ.get("AAL_DATA_DIR", HERE))
+SIGNALS_CSV = DATA_DIR / "signals.csv"
+OUT_CSV = DATA_DIR / "enriched_signals.csv"
+CACHE_FILE = DATA_DIR / "enriched_contacts.json"
+DOMAINS_FILE = DATA_DIR / "company_domains.json"
 ENV_FILE = HERE / ".env"
 
 API_URL = "https://api.apollo.io/api/v1/mixed_people/api_search"

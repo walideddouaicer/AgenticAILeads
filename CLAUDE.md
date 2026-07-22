@@ -153,9 +153,22 @@ app drafts, a human sends.
 
 - `python app.py` must keep exiting 0 (the `runtime.exists()` guard at the
   bottom of `app.py`).
+- `app.py` gates the whole app behind a login form (`auth.py`,
+  `require_login()`), reading credentials from env vars (`APP_USERS`, or
+  `APP_USERNAME`/`APP_PASSWORD`) — set in Coolify, never in the repo. Set
+  `AAL_DISABLE_AUTH=1` to bypass the gate; this is test-only (the page tests
+  set it) and must NEVER be set in production.
+- Container deploy: `Dockerfile` + `docker-entrypoint.sh` build the image,
+  set `AAL_DATA_DIR=/data` (a Coolify persistent volume), and seed
+  `watchlist.json`/`configs` onto the volume on first boot. Full runbook in
+  `DEPLOY.md`.
 - Data files live at repo root by default; `AAL_DATA_DIR` relocates them
-  for tests only. The engines themselves ignore `AAL_DATA_DIR` — they
-  always use the repo root.
+  (used by tests, and by the container deploy to point at a persistent
+  volume). Both the CRM (`common.py`) and the engines honor it — each
+  engine resolves `DATA_DIR = Path(os.environ.get("AAL_DATA_DIR", HERE))`
+  and builds its data-file paths from `DATA_DIR`. Two paths intentionally
+  stay on the code dir (`HERE`): `enrichment_engine.ENV_FILE` and
+  `prospector_engine.PROBE_FILE` (the committed test fixture).
 - `watchlist.json` is git-tracked (it's curated state, not runtime output);
   the rest of the runtime data is gitignored.
 - On this machine git pushes need `http.sslBackend schannel` (already set

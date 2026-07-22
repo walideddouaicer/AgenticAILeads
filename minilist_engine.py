@@ -25,6 +25,7 @@ import csv
 import html
 import io
 import json
+import os
 import re
 import sys
 from datetime import date
@@ -33,9 +34,10 @@ from pathlib import Path
 from filter_engine import evaluate_job
 
 HERE = Path(__file__).resolve().parent
-STATE_FILE = HERE / "signals_state.json"
-CONTACTS_FILE = HERE / "enriched_contacts.json"
-OUT_DIR = HERE / "minilists"
+DATA_DIR = Path(os.environ.get("AAL_DATA_DIR", HERE))
+STATE_FILE = DATA_DIR / "signals_state.json"
+CONTACTS_FILE = DATA_DIR / "enriched_contacts.json"
+OUT_DIR = DATA_DIR / "minilists"
 
 DEFAULT_N = 10
 DEFAULT_EXCLUSIONS = ["intern", "internship", "unpaid", "apprentice"]

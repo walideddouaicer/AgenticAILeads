@@ -36,6 +36,7 @@ New agency boards are baselined silently on the next prospect sweep.
 import argparse
 import csv
 import json
+import os
 import sys
 import time
 from datetime import date, timedelta
@@ -50,9 +51,10 @@ from tls_compat import enable_os_trust_store
 enable_os_trust_store()
 
 HERE = Path(__file__).resolve().parent
-AGENCY_WATCHLIST_FILE = HERE / "agency_watchlist.json"
-STATE_FILE = HERE / "agency_discovery_state.json"
-PROSPECTS_CSV = HERE / "prospects.csv"
+DATA_DIR = Path(os.environ.get("AAL_DATA_DIR", HERE))
+AGENCY_WATCHLIST_FILE = DATA_DIR / "agency_watchlist.json"
+STATE_FILE = DATA_DIR / "agency_discovery_state.json"
+PROSPECTS_CSV = DATA_DIR / "prospects.csv"
 
 PLATFORMS = ["greenhouse", "lever", "ashby", "workable"]
 

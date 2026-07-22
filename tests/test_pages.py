@@ -35,7 +35,8 @@ if "--single" not in sys.argv:
     for data_dir, extra in [(TESTS / "empty_data", []),
                             (TESTS / "fixture_data", ["--interact"])]:
         print(f"\n=== pages against {data_dir.name} ===")
-        env = dict(os.environ, AAL_DATA_DIR=str(data_dir))
+        env = dict(os.environ, AAL_DATA_DIR=str(data_dir),
+                   AAL_DISABLE_AUTH="1")  # bypass login gate for page tests
         r = subprocess.run([sys.executable, __file__, "--single"] + extra,
                            env=env)
         rc = rc or r.returncode

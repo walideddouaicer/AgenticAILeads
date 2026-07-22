@@ -21,6 +21,7 @@ How to find board tokens (Google these, token is in the result URLs):
 import argparse
 import csv
 import json
+import os
 import sys
 import time
 from datetime import date
@@ -55,7 +56,8 @@ _FALLBACK_WATCHLIST = {
     "workable": ["huggingface"],
 }
 
-_WATCHLIST_FILE = Path(__file__).resolve().parent / "watchlist.json"
+DATA_DIR = Path(os.environ.get("AAL_DATA_DIR", Path(__file__).resolve().parent))
+_WATCHLIST_FILE = DATA_DIR / "watchlist.json"
 
 
 def load_watchlist():
@@ -85,8 +87,8 @@ UA = {"User-Agent": "signal-engine/0.2 (polite nightly sweep)"}
 # ----------------------------------------------------------------------
 
 HERE = Path(__file__).resolve().parent
-STATE_FILE = HERE / "signals_state.json"
-CSV_FILE = HERE / "signals.csv"
+STATE_FILE = DATA_DIR / "signals_state.json"
+CSV_FILE = DATA_DIR / "signals.csv"
 
 
 def _get_json(url: str):

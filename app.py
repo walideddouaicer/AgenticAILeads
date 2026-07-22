@@ -32,6 +32,7 @@ import sys
 import streamlit as st
 from streamlit import runtime
 
+import auth
 import common as C
 
 
@@ -41,6 +42,7 @@ def main():
     C.CONFIG_DIR.mkdir(exist_ok=True)
     C.inject_css()
     C.flush_toasts()
+    auth.require_login()  # halts here with a login form until authenticated
 
     pages = {
         "": [
@@ -64,6 +66,7 @@ def main():
     }
     nav = st.navigation(pages)
     C.render_sidebar_stats()
+    auth.logout_button()
     nav.run()
 
 

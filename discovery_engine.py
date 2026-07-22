@@ -34,6 +34,7 @@ run after.
 import argparse
 import html
 import json
+import os
 import re
 import sys
 import time
@@ -48,8 +49,9 @@ from tls_compat import enable_os_trust_store
 enable_os_trust_store()
 
 HERE = Path(__file__).resolve().parent
-WATCHLIST_FILE = HERE / "watchlist.json"
-STATE_FILE = HERE / "discovery_state.json"
+DATA_DIR = Path(os.environ.get("AAL_DATA_DIR", HERE))
+WATCHLIST_FILE = DATA_DIR / "watchlist.json"
+STATE_FILE = DATA_DIR / "discovery_state.json"
 
 PLATFORMS = ["greenhouse", "lever", "ashby", "workable"]
 

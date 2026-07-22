@@ -25,6 +25,7 @@ separate state, separate CSV; nothing here touches client configs.
 import argparse
 import csv
 import json
+import os
 import sys
 import time
 from datetime import date
@@ -38,9 +39,10 @@ from tls_compat import enable_os_trust_store
 enable_os_trust_store()
 
 HERE = Path(__file__).resolve().parent
-AGENCY_WATCHLIST_FILE = HERE / "agency_watchlist.json"
-STATE_FILE = HERE / "prospect_signals_state.json"
-CSV_FILE = HERE / "prospect_signals.csv"
+DATA_DIR = Path(os.environ.get("AAL_DATA_DIR", HERE))
+AGENCY_WATCHLIST_FILE = DATA_DIR / "agency_watchlist.json"
+STATE_FILE = DATA_DIR / "prospect_signals_state.json"
+CSV_FILE = DATA_DIR / "prospect_signals.csv"
 
 FIELDNAMES = ["date", "agency", "mandate_title", "location", "url", "hook"]
 
