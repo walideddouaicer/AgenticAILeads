@@ -9,3 +9,8 @@
 
 # Windows batch files need CRLF to run reliably
 *.bat  text eol=crlf
+
+# Shell scripts and the Dockerfile run on Linux — a CRLF shebang breaks
+# the container entrypoint, so pin them to LF even on Windows checkouts
+*.sh       text eol=lf
+Dockerfile text eol=lf
