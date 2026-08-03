@@ -28,6 +28,13 @@ prospect_signals_state.json
 agency_discovery_state.json
 prospector_probe.json
 
+# Job history — gitignored because it changes every sweep and would bloat
+# the repo, BUT it is the one runtime file that CANNOT be regenerated.
+# Delete it and every days_open / repost_count starts again from zero.
+# Back it up somewhere outside the repo on a schedule.
+job_history.json
+mandate_history.json
+
 # Generated test data
 tests/fixture_data/
 tests/empty_data/

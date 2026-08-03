@@ -34,6 +34,8 @@ from pathlib import Path
 import requests
 
 from signal_engine import FETCHERS, REQUEST_DELAY_SECONDS
+from sweep_core import (load_history, record_observations, save_history,
+                        summarize)
 from tls_compat import enable_os_trust_store
 
 enable_os_trust_store()
@@ -43,6 +45,9 @@ DATA_DIR = Path(os.environ.get("AAL_DATA_DIR", HERE))
 AGENCY_WATCHLIST_FILE = DATA_DIR / "agency_watchlist.json"
 STATE_FILE = DATA_DIR / "prospect_signals_state.json"
 CSV_FILE = DATA_DIR / "prospect_signals.csv"
+# Separate history file — the two pipelines never share state, and an
+# agency's mandate age is a different thing from a client's req age.
+HISTORY_FILE = DATA_DIR / "mandate_history.json"
 
 FIELDNAMES = ["date", "agency", "mandate_title", "location", "url", "hook"]
 
@@ -84,6 +89,7 @@ def main():
 
     watchlist = load_agency_watchlist()
     state = load_state()
+    history = load_history(HISTORY_FILE)
     first_run = not state
     today = date.today().isoformat()
     signals = []
@@ -130,9 +136,18 @@ def main():
                         else ", no new")
                 print(f"  {key}: {len(jobs)} live mandate(s) tracked{note}")
 
+            # Mandate age is the hook: an agency still advertising a role
+            # after 6 weeks is visibly struggling to fill it.
+            record_observations(history, key, jobs, today)
+
             state[key] = jobs
 
     STATE_FILE.write_text(json.dumps(state))
+    save_history(HISTORY_FILE, history)
+
+    s = summarize(history, today)
+    print(f"\nMandate history: {s['jobs_tracked']} mandate(s), {s['live']} "
+          f"live, {s['days_of_history']} day(s) of history.")
 
     if signals:
         new_file = not CSV_FILE.exists()

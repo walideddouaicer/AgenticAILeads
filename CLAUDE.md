@@ -32,7 +32,9 @@ python delivery.py --sync-replies            # poll replies -> set stage 'replie
 Verification (no pytest here — this is the house pattern):
 
 ```powershell
-python -m py_compile app.py common.py views/*.py   # must pass
+python -m compileall -q app.py common.py views      # must pass (silent = ok)
+# NOT `py_compile ... views/*.py` — py_compile does not expand globs and
+# PowerShell does not expand them for it; that form fails with Errno 22.
 python app.py                                      # bare mode must exit 0
 python tests/test_units.py                         # classifier, niche derivation, Apollo parsing
 python tests/test_delivery.py                      # delivery adapters, mocked HTTP
@@ -69,6 +71,16 @@ Two layers connected only through data files in the repo root:
 by the sweep, the mini-list, and the config page's live tester/dry-run —
 change it in one place only.
 
+`sweep_core.py` holds the shared sweep primitives and the **job history
+recorder**. Both sweeps call `record_observations()` immediately before
+`state[key] = jobs`, because the state files are snapshots (overwritten
+every run) while history is append-only and irreplaceable. It derives
+`days_open`, `repost_count`, `rewritten`, `req_burst` and `close_velocity`
+— the features a competitor cannot buy, only wait for. Like `delivery.py`
+it is deliberately **Streamlit-free and common-free**; `common.py` may
+import it, never the reverse. Recording is idempotent per calendar day, so
+a retried sweep cannot inflate counts or invent reposts.
+
 `delivery.py` is the channel-ready email layer: an adapter per tool
 (Manual/Instantly/Smartlead/ApolloSequences) with one shared
 `map_lead()` (email/first_name/company + custom `{hook}`/`{title}`). It is
@@ -88,6 +100,8 @@ Other local scripts depend on these exact shapes; do not change them:
 |---|---|
 | `signals.csv` | append-only; columns `date,client,platform,company,title,location,score,url,hook` (signal engine + backfill write) |
 | `signals_state.json` | `{"platform:token": {job_id: {title,location,url}}}` (sweep state = the "live jobs" pool) |
+| `job_history.json` | `{"platform:token": {job_id: {first_seen,last_seen,times_seen,repost_count,title_changes,gone_since,th}}}` — written by `sweep_core.record_observations`. **The only file here that cannot be regenerated**; deleting it resets every `days_open`/`repost_count` to zero. Gitignored; back it up separately. |
+| `mandate_history.json` | same shape, prospect pipeline (agency mandate ages) |
 | `inbox_status.json` | `{lead_key: {status,on,notes[,fu]}}` (CRM writes; `load_status()` migrates legacy shapes) |
 | `watchlist.json` | `{platform: [tokens]}` (CRM + discovery write) |
 | `enriched_contacts.json` | `{company: [contacts]}` cache — companies never re-queried |

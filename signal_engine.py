@@ -29,6 +29,8 @@ from pathlib import Path
 
 import requests
 
+from sweep_core import (load_history, record_observations, save_history,
+                        summarize)
 from tls_compat import enable_os_trust_store
 
 enable_os_trust_store()
@@ -89,6 +91,9 @@ UA = {"User-Agent": "signal-engine/0.2 (polite nightly sweep)"}
 HERE = Path(__file__).resolve().parent
 STATE_FILE = DATA_DIR / "signals_state.json"
 CSV_FILE = DATA_DIR / "signals.csv"
+# Append-only job history — days_open / repost_count / rewritten live here.
+# Unlike STATE_FILE this is never rebuilt from scratch; see sweep_core.
+HISTORY_FILE = DATA_DIR / "job_history.json"
 
 
 def _get_json(url: str):
@@ -198,6 +203,9 @@ def main():
     args = ap.parse_args()
 
     state = load_state()
+    history = load_history(HISTORY_FILE)
+    hist_totals = {"new": 0, "still_open": 0, "reposted": 0,
+                   "rewritten": 0, "closed": 0}
     first_run = not state
     today = date.today().isoformat()
     all_signals = []
@@ -258,9 +266,24 @@ def main():
                 note = " (baseline)" if (first_run or fresh_key or args.baseline) else ", no new"
                 print(f"  {key}: {len(jobs)} live jobs tracked{note}")
 
+            # Record BEFORE overwriting state: the history is the only
+            # thing here that cannot be re-derived later.
+            for k, v in record_observations(history, key, jobs, today).items():
+                hist_totals[k] += v
+
             state[key] = jobs
 
     STATE_FILE.write_text(json.dumps(state))
+    save_history(HISTORY_FILE, history)
+
+    s = summarize(history, today)
+    print(f"\nHistory: {s['jobs_tracked']} job(s) across {s['boards']} board(s)"
+          f" — {s['live']} live, {s['closed']} closed, "
+          f"{s['days_of_history']} day(s) of history."
+          f"\n  this run: +{hist_totals['new']} new, "
+          f"{hist_totals['closed']} closed, "
+          f"{hist_totals['reposted']} repost(s), "
+          f"{hist_totals['rewritten']} rewritten")
 
     if all_signals:
         new_file = not CSV_FILE.exists()
