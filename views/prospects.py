@@ -469,18 +469,26 @@ play_list = [(k, p) for k, p in by_key.items()
 # Today, In play and All are the same data at three distances, so they are
 # tabs on one page rather than three pages. Today is first because it is
 # the only one you open every day.
-n_today = min(len(due_list) + len(new_list), C.DAILY_QUEUE_CAP)
-tab_today, tab_play, tab_all = st.tabs(
-    [f"📮 Today ({n_today})",
-     f"💬 In play ({len(play_list)})",
-     f"📋 All ({len(by_key)})"])
+n_today = len(play_list) + len(due_list) + min(
+    len(new_list), max(C.DAILY_QUEUE_CAP - len(due_list), 0))
+tab_today, tab_all = st.tabs(
+    [f"📮 Today ({n_today})", f"📋 All ({len(by_key)})"])
 
 # ---------------- Today: the daily driver ----------------
 with tab_today:
     st.caption(
-        f"Follow-ups first — they're warmer, and on LinkedIn they cost no "
-        f"connection request. Then the best new prospects, capped at "
-        f"{C.DAILY_QUEUE_CAP} a day. Ranked by: {_ranked_by}.")
+        f"Replies first, then follow-ups, then new sends (capped at "
+        f"{C.DAILY_QUEUE_CAP}/day). Ranked by: {_ranked_by}.")
+
+    # Live conversations sit at the TOP, not in a tab you have to remember
+    # to click. One unanswered reply is worth more than twenty sends, so
+    # it must be impossible to miss.
+    if play_list:
+        st.markdown(f"**💬 Waiting on you ({len(play_list)}) — "
+                    "answer these before sending anything**")
+        for i, (k, p) in enumerate(play_list):
+            prospect_card(k, p, "play", i)
+        st.divider()
 
     if due_list:
         st.markdown(f"**🔁 Follow-ups due ({len(due_list)})**")
@@ -500,18 +508,6 @@ with tab_today:
     else:
         for i, (k, p) in enumerate(new_list[:room]):
             prospect_card(k, p, "new", i)
-
-# ---------------- In play: live conversations ----------------
-with tab_play:
-    if play_list:
-        st.caption("Replied or call booked. These are worth more than any "
-                   "number of new sends — answer them first.")
-        for i, (k, p) in enumerate(play_list):
-            prospect_card(k, p, "play", i)
-    else:
-        st.info("**No live conversations.** They appear here the moment a "
-                "prospect is marked replied — automatically for email "
-                "(delivery.py --sync-replies), by hand for LinkedIn.")
 
 # ---------------- All: the full table ----------------
 with tab_all:
