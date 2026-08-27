@@ -12,7 +12,7 @@ from datetime import date, datetime
 import streamlit as st
 
 import common as C
-from minilist_engine import build_minilist, render_csv, render_html, DEFAULT_PITCH
+from minilist_engine import build_minilist, render_csv, render_table
 
 C.page_header("🧲 Prospects", "prospects")
 
@@ -24,6 +24,51 @@ pcfg = C.load_prospects_config()
 # ---------------- engines (always available, incl. empty state) ----------------
 
 C.render_engine_panel()
+
+# --- who counts as a prospect (icp.json) ---
+icp = C.load_icp()
+with st.expander(f"🎯 ICP — who the prospector looks for "
+                 f"({icp['size_min']}–{icp['size_max']} people)"):
+    st.caption(
+        "This defines who ENTERS the list. It is not used to rank "
+        "prospects later — if the prospector only collects "
+        f"{icp['size_min']}–{icp['size_max']} person agencies, "
+        "re-checking size when ranking filters nothing.")
+    i1, i2 = st.columns(2)
+    with i1:
+        smin = int(st.number_input(
+            "Min employees", 1, 500, icp["size_min"], key="icp_min",
+            help="Below ~10 an agency usually can't pay $1,500/month. "
+                 "The original 2–20 band was the wrong call."))
+        titles = st.text_area(
+            "Decision-maker titles", ", ".join(icp["titles"]),
+            key="icp_titles", height=70)
+    with i2:
+        smax = int(st.number_input(
+            "Max employees", 1, 500, icp["size_max"], key="icp_max",
+            help="Above ~50 they likely have their own BD team."))
+        countries = st.text_area(
+            "Countries", ", ".join(icp["countries"]),
+            key="icp_countries", height=70)
+    kw = st.text_area("Company keywords", ", ".join(icp["keywords"]),
+                      key="icp_kw", height=70,
+                      help="Matched against the agency's Apollo tags.")
+    if st.button("Save ICP", key="icp_save"):
+        C.save_icp({
+            "titles": C.parse_csv_line(titles),
+            "keywords": C.parse_csv_line(kw),
+            "size_min": smin, "size_max": smax,
+            "countries": C.parse_csv_line(countries),
+        })
+        C.push_toast("ICP saved — next prospector run uses it", "🎯")
+        st.rerun()
+    off = sum(1 for p in prospects if not C.matches_icp(p, icp))
+    if off:
+        st.caption(f"⚠️ {off} of {len(prospects)} existing prospect(s) "
+                   "were collected under a different ICP and no longer "
+                   "match this one. They stay in the list; the daily "
+                   "queue flags them.")
+
 with st.expander("⚙️ Run prospecting engines",
                  expanded=not prospects):
     e1, e2, e3 = st.columns(3)
@@ -42,19 +87,33 @@ with st.expander("⚙️ Run prospecting engines",
                                   "your Apollo plan accepts.")
         st.caption("Find agency decision-makers (Apollo)")
     with e2:
-        C.engine_button("agency_discover", key="pr_run_agency_disc",
-                        extra_args=["--from-prospects"],
+        # One button, two steps: find the boards, then sweep them. They were
+        # never useful apart — a board you haven't swept yields no hooks,
+        # and a sweep with no boards does nothing.
+        C.engine_button("find_mandates", key="pr_run_mandates",
+                        extra_args=["--from-prospects", "--and-sweep"],
                         help_text="Probes your prospects' agency names "
-                                  "across all 4 ATS platforms and adds "
-                                  "boards classified as agencies to "
-                                  "agency_watchlist.json.")
-        st.caption("Find their job boards (mandate source)")
+                                  "across all 4 ATS platforms, adds the ones "
+                                  "that look like agency boards, then sweeps "
+                                  "them for live mandates. A brand-new board "
+                                  "baselines silently, so it yields hooks on "
+                                  "the SECOND run, not the first.")
+        st.caption("Find their boards → sweep → fresh hooks")
     with e3:
-        C.engine_button("prospect_sweep", key="pr_run_sweep",
-                        help_text="Sweeps agency boards; each new posting "
-                                  "becomes a mandate hook. First sweep of a "
-                                  "board baselines silently.")
-        st.caption("Sweep mandates → fresh hooks")
+        n_boards = 0
+        if C.AGENCY_WATCHLIST_FILE.exists():
+            try:
+                import json as _json
+                n_boards = sum(len(v) for v in _json.loads(
+                    C.AGENCY_WATCHLIST_FILE.read_text(encoding="utf-8")
+                ).values())
+            except (ValueError, AttributeError):
+                n_boards = 0
+        st.metric("Agency boards found", n_boards,
+                  help="Most small agencies use Bullhorn/JobAdder/Vincere, "
+                       "not the 4 platforms we can read — expect a low hit "
+                       "rate here.")
+        st.caption(f"{len(signals)} mandate signal(s) on file")
 
 if not prospects:
     st.info("**No prospects yet.** This page fills from `prospects.csv`.")
@@ -82,15 +141,29 @@ mandates = {k: C.mandates_for_agency(p.get("agency", ""), signals)
 
 
 def niche_for(k, p):
-    """Priority: per-prospect override (status file) > CSV column > derived."""
+    """Priority: per-prospect override > live mandates > CSV column.
+
+    Mandates outrank the CSV deliberately. The niche_keywords column comes
+    from whatever list built the row — for the Clay import it was scraped
+    marketing copy, i.e. what an agency *claims* to place. Mandate titles
+    are what they are *actually working this week*. Evidence beats
+    advertising, so a prospect with live mandates gets a mini-list built
+    from those.
+
+    Derived keywords are specialisms only (see _NICHE_STOPWORDS): an
+    agency whose mandates are all "Software Engineer" derives nothing and
+    correctly falls through to the stated niche.
+    """
     entry = status.get(k) or {}
     if (entry.get("niche") or "").strip():
         return C.parse_csv_line(entry["niche"]), "override"
-    if (p.get("niche_keywords") or "").strip():
-        return C.parse_csv_line(p["niche_keywords"]), "prospects.csv"
     derived = C.derive_niche_keywords(
         [m.get("mandate_title", "") for m in mandates[k]])
-    return derived, "derived from mandates" if derived else "none"
+    if derived:
+        return derived, "derived from mandates"
+    if (p.get("niche_keywords") or "").strip():
+        return C.parse_csv_line(p["niche_keywords"]), "prospects.csv"
+    return [], "none"
 
 
 def hook_for(k, p):
@@ -124,14 +197,29 @@ touched = sum(1 for e in status.values()
               and e.get("status") in ("contacted", "replied", "call_booked",
                                       "client_won"))
 
-m = st.columns(7)
-for col, stage in zip(m, ["new"] + C.PROSPECT_STAGES + ["dismissed"]):
-    col.metric(stage.replace("_", " "),
-               sum(1 for s in stage_of.values() if s == stage),
-               help=f"Prospects currently in the '{stage}' stage.")
-m[6].metric("follow-ups due", n_due,
-            help=f"Contacted ≥{C.FOLLOWUP_DAYS} days ago, fewer than "
-                 f"{C.MAX_FOLLOWUPS} follow-ups sent.")
+# Only the three numbers that change what you do next. The rest
+# (replied / call booked / client won / dismissed) were five zeroes taking
+# up the top of the page — they belong in a report, not a work screen.
+# Stages themselves are unchanged; this is display only.
+m = st.columns(4)
+m[0].metric("new", sum(1 for s in stage_of.values() if s == "new"),
+            help="Never contacted.")
+m[1].metric("contacted", sum(1 for s in stage_of.values() if s == "contacted"),
+            help="Message sent, no answer yet.")
+m[2].metric("replied", sum(1 for s in stage_of.values() if s == "replied"),
+            help="They answered. Handle these first — an unanswered reply "
+                 "is the most expensive thing on this page.")
+m[3].metric("follow-ups due", n_due,
+            help=f"Contacted ≥{C.FOLLOWUP_DAYS} days ago, under "
+                 f"{C.MAX_FOLLOWUPS} follow-ups. A follow-up never costs a "
+                 "LinkedIn connection request — those are spent only on "
+                 "first contact, so following up is free capacity.")
+booked = sum(1 for s in stage_of.values()
+             if s in ("call_booked", "client_won"))
+if booked or any(s == "dismissed" for s in stage_of.values()):
+    st.caption(f"{booked} booked/won · "
+               f"{sum(1 for s in stage_of.values() if s == 'dismissed')} "
+               "dismissed")
 st.caption(f"{len(by_key)} prospect(s) · {touched} touched today · "
            f"{len(signals)} mandate signal(s) on file")
 
@@ -246,32 +334,27 @@ def prospect_card(k, p, kind, i):
                 st.rerun()
 
         if kws:
-            ml_rows = build_minilist(kws, n=10, state_file=C.STATE_FILE,
+            # Geo-matched to the prospect's market — see core.market_tokens.
+            ml_rows = build_minilist(kws,
+                                     locations=C.market_tokens(
+                                         p.get("location", "")),
+                                     n=10, state_file=C.STATE_FILE,
                                      contacts_file=C.CONTACTS_CACHE)
             if ml_rows:
                 n_contact = sum(1 for r in ml_rows if r["contact_name"])
                 st.caption(f"🎁 Mini-list ready: **{len(ml_rows)} companies** "
                            f"hiring {', '.join(kws[:3])} right now "
                            f"({n_contact} with contacts) — the door-opener.")
-                d1, d2 = st.columns(2)
                 slug = "".join(c if c.isalnum() else "-"
                                for c in agency.lower()).strip("-") or "prospect"
                 fname = f"minilist_{slug}_{date.today().isoformat()}"
-                with d1:
-                    st.download_button(
-                        "⬇ Mini-list CSV", render_csv(ml_rows),
-                        file_name=f"{fname}.csv", mime="text/csv",
-                        key=f"mlc_{k}", width="stretch",
-                        help="Raw rows — paste the top ones into a DM.")
-                with d2:
-                    st.download_button(
-                        "⬇ Branded one-pager (HTML)",
-                        render_html(agency, ml_rows, DEFAULT_PITCH),
-                        file_name=f"{fname}.html", mime="text/html",
-                        key=f"mlh_{k}", width="stretch",
-                        help="Open → Ctrl+P → PDF, attach to the DM: "
-                             "'10 companies hiring exactly what you place "
-                             "— want 50/week?'")
+                st.code(render_table(ml_rows), language=None)
+                st.download_button(
+                    "⬇ Mini-list CSV", render_csv(ml_rows),
+                    file_name=f"{fname}.csv", mime="text/csv",
+                    key=f"mlc_{k}", width="stretch",
+                    help="Only if they ask for the full list — the table "
+                         "above is what goes in the message.")
             else:
                 st.caption("No tracked jobs match these niche keywords — "
                            "widen them or grow the client watchlist.")
@@ -350,40 +433,102 @@ def prospect_card(k, p, kind, i):
 due_list = [(k, p) for k, p in by_key.items()
             if C.followup_due(status.get(k))]
 new_list = [(k, p) for k, p in by_key.items() if stage_of[k] == "new"]
-# best first: has a mandate hook > has any mandates > recency
-new_list.sort(key=lambda kp: (hook_for(kp[0], kp[1])[1] == "mandate",
-                              bool(mandates[kp[0]]),
-                              kp[1].get("date_found", "")), reverse=True)
+
+# Ranking order comes from build_today.py when it has run today. That
+# script does the expensive part — geo-matched gifts, contact counts, the
+# small/bulk split — and it can run from Task Scheduler. Keeping the page
+# a reader means the ranking can get smarter (days_open, reply-rate
+# feedback) without touching this file.
+#
+# When today.json is missing or stale we fall back to a cheap live sort,
+# so the page is never blocked on a script having run.
+_today = {}
+_today_file = C.DATA_DIR / "today.json"
+if _today_file.exists():
+    try:
+        import json as _j
+        _d = _j.loads(_today_file.read_text(encoding="utf-8"))
+        if _d.get("date") == date.today().isoformat():
+            _today = {it["key"]: n for n, it in enumerate(_d.get("items", []))}
+            _ranked_by = f"build_today.py ({len(_d.get('items', []))} queued)"
+    except (ValueError, KeyError):
+        _today = {}
+
+if _today:
+    new_list.sort(key=lambda kp: _today.get(kp[0], 10_000))
+else:
+    _ranked_by = "live sort (run build_today.py for the full ranking)"
+    # best first: has a mandate hook > has any mandates > recency
+    new_list.sort(key=lambda kp: (hook_for(kp[0], kp[1])[1] == "mandate",
+                                  bool(mandates[kp[0]]),
+                                  kp[1].get("date_found", "")), reverse=True)
 play_list = [(k, p) for k, p in by_key.items()
              if stage_of[k] in ("replied", "call_booked")]
 
-st.markdown(f"#### 🔁 Follow-ups due ({len(due_list)}) — do these first")
-if due_list:
-    for i, (k, p) in enumerate(due_list):
-        prospect_card(k, p, "fu", i)
-else:
-    st.caption("None due.")
+# ---------------- the three zoom levels ----------------
+# Today, In play and All are the same data at three distances, so they are
+# tabs on one page rather than three pages. Today is first because it is
+# the only one you open every day.
+n_today = min(len(due_list) + len(new_list), C.DAILY_QUEUE_CAP)
+tab_today, tab_play, tab_all = st.tabs(
+    [f"📮 Today ({n_today})",
+     f"💬 In play ({len(play_list)})",
+     f"📋 All ({len(by_key)})"])
 
-st.markdown(f"#### 🆕 New prospects ({len(new_list)})")
-if new_list:
-    for i, (k, p) in enumerate(new_list):
-        prospect_card(k, p, "new", i)
-else:
-    st.caption("No new prospects — run the Prospector above.")
+# ---------------- Today: the daily driver ----------------
+with tab_today:
+    st.caption(
+        f"Follow-ups first — they're warmer, and on LinkedIn they cost no "
+        f"connection request. Then the best new prospects, capped at "
+        f"{C.DAILY_QUEUE_CAP} a day. Ranked by: {_ranked_by}.")
 
-st.markdown(f"#### 💬 In play — replied / call booked ({len(play_list)})")
-if play_list:
-    for i, (k, p) in enumerate(play_list):
-        prospect_card(k, p, "play", i)
-else:
-    st.caption("No live conversations right now.")
+    if due_list:
+        st.markdown(f"**🔁 Follow-ups due ({len(due_list)})**")
+        for i, (k, p) in enumerate(due_list):
+            prospect_card(k, p, "fu", i)
+    else:
+        st.caption("No follow-ups due.")
 
-# ---------------- full table ----------------
+    room = max(C.DAILY_QUEUE_CAP - len(due_list), 0)
+    st.markdown(f"**🆕 New prospects — showing {min(room, len(new_list))} "
+                f"of {len(new_list)}**")
+    if not new_list:
+        st.caption("No new prospects — run the Prospector above.")
+    elif not room:
+        st.caption(f"Daily cap ({C.DAILY_QUEUE_CAP}) already filled by "
+                   "follow-ups. Come back tomorrow, or work the In play tab.")
+    else:
+        for i, (k, p) in enumerate(new_list[:room]):
+            prospect_card(k, p, "new", i)
 
-with st.expander("📋 All prospects (table)"):
+# ---------------- In play: live conversations ----------------
+with tab_play:
+    if play_list:
+        st.caption("Replied or call booked. These are worth more than any "
+                   "number of new sends — answer them first.")
+        for i, (k, p) in enumerate(play_list):
+            prospect_card(k, p, "play", i)
+    else:
+        st.info("**No live conversations.** They appear here the moment a "
+                "prospect is marked replied — automatically for email "
+                "(delivery.py --sync-replies), by hand for LinkedIn.")
+
+# ---------------- All: the full table ----------------
+with tab_all:
+    q = st.text_input("Search", key="p_all_q",
+                      placeholder="agency, person, location")
+    only = st.multiselect("Stage", ["new", "contacted", "replied",
+                                    "call_booked", "client_won", "dismissed"],
+                          key="p_all_stage")
     rows = []
     for k, p in by_key.items():
         entry = status.get(k) or {}
+        if only and stage_of[k] not in only:
+            continue
+        blob = " ".join([p.get("agency", ""), p.get("person_name", ""),
+                         p.get("location", "")]).lower()
+        if q.strip() and q.strip().lower() not in blob:
+            continue
         rows.append({
             "agency": p.get("agency", ""),
             "person": p.get("person_name", ""),
@@ -396,6 +541,7 @@ with st.expander("📋 All prospects (table)"):
             "linkedin": p.get("linkedin", ""),
             "notes": entry.get("notes", ""),
         })
-    st.dataframe(rows, width="stretch", height=340,
+    st.caption(f"{len(rows)} of {len(by_key)} prospect(s)")
+    st.dataframe(rows, width="stretch", height=420, hide_index=True,
                  column_config={
                      "linkedin": st.column_config.LinkColumn("linkedin")})

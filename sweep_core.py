@@ -56,8 +56,86 @@ the sweep is meant to run unattended and retries are normal.
 
 import hashlib
 import json
+import re
+import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
+
+
+# Values companies type into the "location" box that describe a WORKING
+# ARRANGEMENT rather than a place. Cloudflare's Greenhouse board says
+# "Hybrid" for 199 jobs; SpaceX says "In-Office". Those are useless for
+# geo-matching a mini-list, and worse, they hide the real city that other
+# fields on the same record usually carry.
+_WORKPLACE_WORDS = {
+    "remote", "hybrid", "in-office", "in office", "onsite", "on-site",
+    "on site", "distributed", "anywhere", "flexible", "wfh",
+    "remote (us)", "fully remote", "office", "various",
+}
+
+
+def split_workplace(raw: str):
+    """'Remote - United States' -> ('United States', 'remote').
+
+    Returns (place, workplace). `place` is the geographic part with the
+    arrangement stripped; `workplace` is remote/hybrid/onsite or "".
+    Either can be empty — a bare "Hybrid" yields ("", "hybrid").
+    """
+    s = (raw or "").strip()
+    if not s:
+        return "", ""
+    low = s.lower()
+
+    workplace = ""
+    for word, tag in (("hybrid", "hybrid"), ("remote", "remote"),
+                      ("wfh", "remote"), ("distributed", "remote"),
+                      ("in-office", "onsite"), ("in office", "onsite"),
+                      ("on-site", "onsite"), ("on site", "onsite"),
+                      ("onsite", "onsite")):
+        if word in low:
+            workplace = tag
+            break
+
+    if low in _WORKPLACE_WORDS:
+        return "", workplace
+
+    # "Remote - United States", "Hybrid (London)", "Remote, EMEA"
+    place = re.sub(
+        r"\b(fully\s+)?(remote|hybrid|in[- ]?office|on[- ]?site|onsite|"
+        r"distributed|wfh)\b", "", s, flags=re.I)
+    place = place.strip(" ,-–—()/|").strip()
+    return place, workplace
+
+
+def best_location(*candidates):
+    """First candidate that names an actual place.
+
+    Fetchers pass several fields in priority order; the first one that
+    isn't blank and isn't a bare working-arrangement wins.
+    """
+    for c in candidates:
+        if not c:
+            continue
+        place, _ = split_workplace(str(c))
+        if place:
+            return place
+    return ""
+
+
+def enable_utf8_stdout():
+    """Make prints survive a cp1252 console.
+
+    The engines print '●' and '—'. Under Task Scheduler the console is
+    cp1252, and printing '●' raises UnicodeEncodeError *mid-loop* — which
+    killed the nightly sweep silently for weeks before anyone read the log.
+    common.start_engine sets PYTHONUTF8=1 for app-launched runs; this makes
+    a bare `python signal_engine.py` safe too, whoever starts it.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass        # already wrapped, or not a real stream (tests)
 
 # Keep closed jobs for a year — close_velocity and repost detection both
 # need the dead ones. Older than this and they're only taking up space.
@@ -90,9 +168,26 @@ def save_json_state(path: Path, state: dict) -> None:
 # ---------------------------------------------------------------- history
 
 def title_hash(job: dict) -> str:
-    """Short hash of the fields that change when a req is rewritten."""
+    """Legacy combined hash (title + location). Kept for existing entries."""
     raw = f"{job.get('title', '')}|{job.get('location', '')}"
     return hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
+
+
+def _title_only_hash(job: dict) -> str:
+    """Hash of the TITLE alone — what 'rewritten' should actually mean.
+
+    The combined title+location hash conflated two different events. A
+    company renaming "Backend Engineer" to "Staff Backend Engineer
+    (Payments)" is a rewrite and a real signal that they're struggling
+    with the spec. A location string changing is not.
+
+    It also made the recorder fragile against ourselves: when the fetchers
+    learned to read Greenhouse `offices` (so "Hybrid" became "Washington,
+    DC"), ~511 jobs would have logged a rewrite that never happened —
+    corrupting the one file here that cannot be rebuilt.
+    """
+    return hashlib.md5(
+        str(job.get("title", "")).encode("utf-8")).hexdigest()[:12]
 
 
 def load_history(path: Path) -> dict:
@@ -133,16 +228,24 @@ def record_observations(history: dict, board_key: str, jobs: dict,
     for job_id, job in (jobs or {}).items():
         job_id = str(job_id)
         th = title_hash(job)
+        tt = _title_only_hash(job)
         entry = board.get(job_id)
 
         if entry is None:
             board[job_id] = {
                 "first_seen": today, "last_seen": today, "times_seen": 1,
                 "repost_count": 0, "title_changes": 0,
-                "gone_since": None, "th": th,
+                "gone_since": None, "th": th, "tt": tt,
             }
             stats["new"] += 1
             continue
+
+        # Migration: entries written before `tt` existed get it backfilled
+        # SILENTLY. Comparing a title-only hash against a legacy combined
+        # hash would flag every job in the file as rewritten.
+        if "tt" not in entry:
+            entry["tt"] = tt
+            entry["th"] = th
 
         # Vanished and came back — the strongest single signal in here.
         if entry.get("gone_since"):
@@ -150,10 +253,12 @@ def record_observations(history: dict, board_key: str, jobs: dict,
             entry["gone_since"] = None
             stats["reposted"] += 1
 
-        if entry.get("th") and entry["th"] != th:
+        # Rewrite = the TITLE changed. Location moves are not rewrites.
+        if entry.get("tt") and entry["tt"] != tt:
             entry["title_changes"] = entry.get("title_changes", 0) + 1
-            entry["th"] = th
             stats["rewritten"] += 1
+        entry["tt"] = tt
+        entry["th"] = th        # kept current, no longer used for detection
 
         # Idempotent: a second sweep the same day must not inflate counts.
         if entry.get("last_seen") != today:

@@ -1,0 +1,721 @@
+#!/usr/bin/env python3
+"""
+Agentic AI Leads — core domain logic. NO Streamlit, NO UI.
+
+Everything here is a pure function or a plain file read/write: paths,
+constants, the lead + prospect stores, the stage machine, follow-up rules,
+DM rendering, the watchlist, and the delivery-layer bindings.
+
+WHY THIS MODULE EXISTS
+----------------------
+All of this used to live in common.py, which imports streamlit. That meant
+`lead_key()`, `followup_due()` and the stage rules could only be called
+from inside a browser session — so no scheduled job, no CLI tool and no
+headless script could touch the business logic. Splitting it out is what
+makes automation possible at all.
+
+THE RULE (same one delivery.py and sweep_core.py follow):
+    common.py may import core.  core must NEVER import common or streamlit.
+tests/test_units.py enforces it.
+
+common.py re-exports every public name here, so pages keep calling
+`C.lead_key(...)` and nothing in views/ had to change.
+
+Business rules preserved exactly:
+  - lead_key()  = md5 of date|client|company|title, first 12 hex chars.
+                  Change it and every inbox_status.json entry is orphaned.
+  - stages      new -> contacted -> replied -> won, plus dismissed;
+                LEGACY_MAP migrates old names on load.
+  - follow-ups  due FOLLOWUP_DAYS after the last touch; after
+                MAX_FOLLOWUPS (the breakup) the lead leaves the queue.
+  - hooks       older than FRESH_DAYS degrade from "just opened" to
+                "currently hiring" (display_hook).
+
+Mutators come in two halves. apply_stage()/apply_followup() here do the
+file write and nothing else, so a script can use them. common.set_stage()
+and common.mark_followed_up() wrap them with the undo snapshot and toast.
+Pages must keep using the common.* versions — never write status files
+directly.
+
+AAL_DATA_DIR relocates the data directory (tests, container deploy).
+"""
+
+import csv
+import hashlib
+import json
+import os
+import re
+from datetime import date, datetime
+from pathlib import Path
+from urllib.parse import quote
+
+import delivery
+from filter_engine import DEFAULTS
+
+HERE = Path(__file__).resolve().parent
+DATA_DIR = Path(os.environ.get("AAL_DATA_DIR", HERE))
+CONFIG_DIR = DATA_DIR / "configs"
+SIGNALS_CSV = DATA_DIR / "signals.csv"
+ENRICHED_CSV = DATA_DIR / "enriched_signals.csv"
+CONTACTS_CACHE = DATA_DIR / "enriched_contacts.json"
+STATE_FILE = DATA_DIR / "signals_state.json"
+INBOX_STATUS = DATA_DIR / "inbox_status.json"
+WATCHLIST_FILE = DATA_DIR / "watchlist.json"
+DISCOVERY_STATE = DATA_DIR / "discovery_state.json"
+ENV_FILE = DATA_DIR / ".env"
+
+# --- own-client prospecting (separate pipeline, separate files) ---
+PROSPECTS_CSV = DATA_DIR / "prospects.csv"
+PROSPECT_SIGNALS_CSV = DATA_DIR / "prospect_signals.csv"
+PROSPECTS_STATUS = DATA_DIR / "prospects_status.json"
+PROSPECTS_CONFIG = DATA_DIR / "prospects_config.json"
+AGENCY_WATCHLIST_FILE = DATA_DIR / "agency_watchlist.json"
+
+DEFAULT_TEMPLATE = (
+    "Hi {first_name} — {hook}. Roles like that are exactly what we place. "
+    "Worth a quick chat about how we can help you fill them faster?"
+)
+DEFAULT_EMAIL_SUBJECT = "Your {title} opening"
+DEFAULT_EMAIL_TEMPLATE = (
+    "Hi {first_name},\n\n"
+    "{hook} — filling roles like that is exactly what we do.\n\n"
+    "Worth a quick call this week? Happy to share how we'd approach it.\n\n"
+    "Best,\n"
+)
+DEFAULT_FOLLOWUP_TEMPLATE = (
+    "Hi {first_name} — floating this back up. {hook}, and roles like that "
+    "don't stay open long. Worth a quick chat this week?"
+)
+DEFAULT_FOLLOWUP2_TEMPLATE = (
+    "Hi {first_name} — last note from me. If filling roles faster ever becomes "
+    "a priority, happy to show you how we work: you pay per meeting that "
+    "actually happens, first one free. Door's open."
+)
+FOLLOWUP_DAYS = 3
+MAX_FOLLOWUPS = 2   # after follow-up #2 (breakup), lead leaves the queue
+FRESH_DAYS = 7      # signals older than this switch to "currently hiring" wording
+DEFAULT_MEETING_RATE = 150
+DAILY_QUEUE_CAP = 15   # default new sends/day (LinkedIn-safe)
+
+STAGES = ["contacted", "replied", "won"]
+# legacy stage names from earlier versions -> current
+LEGACY_MAP = {"call booked": "replied", "showed": "won", "snoozed": "new"}
+
+# prospect pipeline stages (OUR outreach to agencies) — distinct from leads
+PROSPECT_STAGES = ["contacted", "replied", "call_booked", "client_won"]
+
+DEFAULT_PROSPECT_DM = (
+    "Hi {first_name} — {hook}. We run signal-based outbound for recruitment "
+    "agencies: we find companies actively hiring in your niche and book "
+    "direct-client meetings with the decision-makers. You pay per meeting "
+    "that actually happens — first one free so you can judge the quality "
+    "yourself. Worth a 15-minute call?"
+)
+DEFAULT_PROSPECT_FOLLOWUP = (
+    "Hi {first_name} — floating this back up. {hook} — happy to send a free "
+    "sample first: 10 companies hiring exactly what you place, with the "
+    "decision-maker contacts. Pay per showed meeting, first one free. "
+    "Want the list?"
+)
+DEFAULT_PROSPECT_FOLLOWUP2 = (
+    "Hi {first_name} — last note from me. If direct-client acquisition ever "
+    "becomes a priority: we book the meetings, you pay only when they show, "
+    "first one free. Door's open."
+)
+
+PLATFORMS = ["greenhouse", "lever", "ashby", "workable"]
+
+# App-wide stage colors (also the badge palette; keep in sync with Help page)
+STAGE_COLORS = {
+    "new": "#D8FF3E",
+    "contacted": "#4A90D9",
+    "replied": "#F5A623",
+    "won": "#3CB371",
+    "dismissed": "#999999",
+    # prospect-only stages
+    "call_booked": "#7A5FD0",
+    "client_won": "#3CB371",
+}
+# light backgrounds get dark text, the rest white
+_BADGE_FG = {"new": "#111111", "replied": "#111111"}
+
+# outreach channel (per-client) — badge palette (amber = the theme's
+# highlight color; ink = both channels at once)
+CHANNELS = ["linkedin", "email", "both"]
+CHANNEL_COLORS = {"linkedin": "#4A90D9", "email": "#F2B705", "both": "#0A0A0A"}
+_CHANNEL_FG = {"email": "#111111"}
+
+# ============================ profiles ============================
+
+# ============================ profiles ============================
+
+def list_profiles():
+    if not CONFIG_DIR.exists():
+        return []
+    return sorted(p.stem for p in CONFIG_DIR.glob("*.json"))
+
+
+def load_profile(name):
+    try:
+        cfg = json.loads((CONFIG_DIR / f"{name}.json").read_text(encoding="utf-8"))
+    except Exception:
+        cfg = {}
+    cfg.setdefault("client_id", name)
+    cfg.setdefault("dm_template", DEFAULT_TEMPLATE)
+    cfg.setdefault("email_subject", DEFAULT_EMAIL_SUBJECT)
+    cfg.setdefault("email_template", DEFAULT_EMAIL_TEMPLATE)
+    cfg.setdefault("followup_template", DEFAULT_FOLLOWUP_TEMPLATE)
+    cfg.setdefault("followup2_template", DEFAULT_FOLLOWUP2_TEMPLATE)
+    cfg.setdefault("meeting_rate", DEFAULT_MEETING_RATE)
+    # optional delivery fields (added by the channel-ready delivery layer;
+    # absent in older config files, which stay valid)
+    cfg.setdefault("channel", "linkedin")
+    cfg.setdefault("campaign_id", "")
+    for k, v in DEFAULTS.items():
+        cfg.setdefault(k, v if not isinstance(v, (list, dict)) else type(v)())
+    return cfg
+
+
+def parse_csv_line(text):
+    return [x.strip() for x in text.split(",") if x.strip()]
+
+
+def parse_weights(text):
+    out = {}
+    for line in text.splitlines():
+        if ":" in line:
+            k, _, v = line.partition(":")
+            try:
+                out[k.strip()] = int(v.strip())
+            except ValueError:
+                continue
+    return out
+
+
+def weights_to_text(w):
+    return "\n".join(f"{k}: {v}" for k, v in (w or {}).items())
+
+
+# ============================ leads & status ============================
+
+# ============================ leads & status ============================
+
+def all_tracked_jobs():
+    if not STATE_FILE.exists():
+        return []
+    try:
+        state = json.loads(STATE_FILE.read_text())
+    except json.JSONDecodeError:
+        return []
+    jobs = []
+    for board_key, board_jobs in state.items():
+        platform, _, company = board_key.partition(":")
+        for job_id, j in board_jobs.items():
+            # job_id and board_key are carried through so callers can join
+            # against job_history.json, which is keyed the same way. Without
+            # them the only join key is the URL, which means a linear scan.
+            jobs.append({**j, "company": company, "platform": platform,
+                         "job_id": str(job_id), "board_key": board_key})
+    return jobs
+
+
+def lead_key(row):
+    raw = "|".join(row.get(k, "") or "" for k in ["date", "client", "company", "title"])
+    return hashlib.md5(raw.encode()).hexdigest()[:12]
+
+
+def load_leads():
+    """signals.csv is the source of truth; contacts are joined in live from
+    enriched_contacts.json, so new signals never wait on an enrichment
+    re-run. Falls back to enriched_signals.csv if signals.csv is missing."""
+    src = SIGNALS_CSV if SIGNALS_CSV.exists() else ENRICHED_CSV
+    if not src.exists():
+        return [], src.name
+    rows = list(csv.DictReader(src.open(encoding="utf-8")))
+    try:
+        cache = json.loads(CONTACTS_CACHE.read_text(encoding="utf-8")) \
+            if CONTACTS_CACHE.exists() else {}
+    except json.JSONDecodeError:
+        cache = {}
+    for r in rows:
+        if not r.get("client"):
+            r["client"] = "default"
+        if not r.get("contact1_name"):
+            for i, c in enumerate((cache.get(r.get("company", "")) or [])[:2], 1):
+                for k, v in c.items():
+                    r[f"contact{i}_{k}"] = v
+    label = src.name + (" + contacts" if cache else "")
+    return rows, label
+
+
+def load_status(path=None):
+    """{key: {'status': str, 'on': iso, 'notes': str}} — migrates all
+    earlier formats (plain string, legacy stage names, snooze fields).
+    Default file is the lead inbox; pass PROSPECTS_STATUS for prospects."""
+    path = path or INBOX_STATUS
+    if not path.exists():
+        return {}
+    raw = json.loads(path.read_text())
+    out = {}
+    for k, v in raw.items():
+        if isinstance(v, str):
+            v = {"status": v, "on": ""}
+        v.pop("until", None)
+        v.setdefault("notes", "")
+        s = v.get("status", "new")
+        v["status"] = LEGACY_MAP.get(s, s)
+        out[k] = v
+    return out
+
+
+def save_status(status, path=None):
+    (path or INBOX_STATUS).write_text(json.dumps(status, indent=1))
+
+
+def effective_status(entry) -> str:
+    if not entry:
+        return "new"
+    return entry.get("status", "new")
+
+
+def followup_due(entry) -> bool:
+    if not entry or entry.get("status") != "contacted":
+        return False
+    try:
+        if int(entry.get("fu", 0) or 0) >= MAX_FOLLOWUPS:
+            return False   # breakup already sent — stop chasing
+    except (TypeError, ValueError):
+        pass
+    on = entry.get("on") or ""
+    try:
+        return (date.today() - datetime.strptime(on, "%Y-%m-%d").date()).days >= FOLLOWUP_DAYS
+    except ValueError:
+        return False
+
+
+def all_clients(leads):
+    return sorted(set(list_profiles()) | {r.get("client", "default") for r in leads})
+
+
+def display_hook(row):
+    """Hook wording follows the signal's age: fresh (<= FRESH_DAYS) keeps the
+    stored 'just opened' hook; older signals degrade to 'currently hiring'
+    so a DM never claims recency the posting doesn't have."""
+    d = row.get("date") or ""
+    try:
+        age = (date.today() - datetime.strptime(d, "%Y-%m-%d").date()).days
+    except ValueError:
+        age = None
+    if age is not None and age > FRESH_DAYS:
+        loc = row.get("location", "")
+        return (f"saw you're currently hiring a {row.get('title', '')}"
+                + (f" in {loc}" if loc else ""))
+    return row.get("hook", "")
+
+
+def render_dm(template, row):
+    contact = row.get("contact1_name", "")
+    first = contact.split()[0] if contact else "there"
+    fields = {
+        "first_name": first,
+        "hook": display_hook(row),
+        "company": row.get("company", ""),
+        "title": row.get("title", ""),
+        "location": row.get("location", ""),
+        "client": row.get("client", ""),
+    }
+    try:
+        return template.format(**fields)
+    except (KeyError, IndexError, ValueError):
+        return template
+
+
+def mailto_link(email, subject, body):
+    return f"mailto:{email}?subject={quote(subject)}&body={quote(body)}"
+
+
+# --------- delivery layer (email tools plug in via .env keys) ---------
+
+def delivery_adapters():
+    """All adapters, bound to this app's .env (AAL_DATA_DIR-aware)."""
+    return delivery.all_adapters(env_file=ENV_FILE)
+
+
+def active_email_adapter():
+    """First configured email adapter, or None (manual excluded)."""
+    return delivery.active_email_adapter(env_file=ENV_FILE)
+
+
+def apply_replies(adapter, campaign_id=None):
+    """Poll the adapter for replies and move matched leads to 'replied'.
+
+    Matches on contact email; only leads currently 'new' or 'contacted'
+    are advanced (never downgrades 'won'/'dismissed'). Writes status
+    directly (no toast/undo) so it's usable from the CLI too — the app
+    shows its own toast afterwards. Returns a summary dict."""
+    try:
+        emails = adapter.sync_replies(campaign_id)
+    except Exception as e:  # network/HTTP/parse — surface, don't crash
+        return {"error": f"{e.__class__.__name__}: {e}", "matched": 0}
+    email_set = {str(e).strip().lower() for e in (emails or []) if e}
+    if not email_set:
+        return {"emails": 0, "matched": 0, "changed": []}
+    leads, _ = load_leads()
+    status = load_status()
+    changed = []
+    for r in leads:
+        em = (r.get("contact1_email") or "").strip().lower()
+        if not em or em not in email_set:
+            continue
+        k = lead_key(r)
+        if effective_status(status.get(k)) in ("new", "contacted"):
+            e = status.get(k, {"status": "new", "on": "", "notes": ""})
+            e["status"] = "replied"
+            e["on"] = date.today().isoformat()
+            status[k] = e
+            changed.append(r)
+    if changed:
+        save_status(status)
+    return {"emails": len(email_set), "matched": len(changed),
+            "changed": changed}
+
+
+# --------- manual contacts (Apollo API enrichment is plan-gated) ---------
+
+def load_contacts_cache():
+    """enriched_contacts.json — same file/format enrichment_engine writes:
+    {company: [{name, title, linkedin, email}]}."""
+    if CONTACTS_CACHE.exists():
+        try:
+            return json.loads(CONTACTS_CACHE.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def save_contacts_cache(cache):
+    CONTACTS_CACHE.write_text(json.dumps(cache, indent=2), encoding="utf-8")
+
+
+# ======================= stage mutations (pure) =======================
+# The file-writing half of set_stage / mark_followed_up. No toast, no undo,
+# no Streamlit — so scheduled jobs and CLI tools can advance a stage too.
+# The UI wrappers in common.py add the snapshot and the toast on top.
+
+def apply_stage(status, key, stage, notes=None, path=None):
+    """Set a stage and stamp today's date. Mutates `status`, writes the file."""
+    entry = status.get(key, {"status": "new", "on": "", "notes": ""})
+    entry["status"] = stage
+    entry["on"] = date.today().isoformat()
+    if notes is not None:
+        entry["notes"] = notes
+    status[key] = entry
+    save_status(status, path)
+    return entry
+
+
+def apply_followup(status, key, path=None):
+    """Reset the follow-up timer and count the touch. Returns the entry, so
+    callers can read entry['fu'] for the message they just sent."""
+    e = status.get(key, {"status": "contacted", "on": "", "notes": ""})
+    e["on"] = date.today().isoformat()
+    e["fu"] = int(e.get("fu", 0) or 0) + 1
+    status[key] = e
+    save_status(status, path)
+    return e
+
+
+# ==================== prospects (our own clients) ====================
+
+# ============================ prospects (our own clients) ============================
+
+def load_prospects():
+    """Rows from prospects.csv (prospector_engine output + user edits)."""
+    if not PROSPECTS_CSV.exists():
+        return []
+    return list(csv.DictReader(PROSPECTS_CSV.open(encoding="utf-8")))
+
+
+def load_prospect_signals():
+    """Rows from prospect_signals.csv (mandate sweep output), newest first."""
+    if not PROSPECT_SIGNALS_CSV.exists():
+        return []
+    rows = list(csv.DictReader(PROSPECT_SIGNALS_CSV.open(encoding="utf-8")))
+    rows.sort(key=lambda r: r.get("date", ""), reverse=True)
+    return rows
+
+
+def prospect_key(row):
+    """Stable key for prospects_status.json: LinkedIn URL when present,
+    else agency+person name — never collides with lead_key space because
+    it lives in a separate file."""
+    lk = (row.get("linkedin") or "").strip().lower().rstrip("/")
+    raw = lk or (f"{(row.get('agency') or '').strip().lower()}"
+                 f"|{(row.get('person_name') or '').strip().lower()}")
+    return hashlib.md5(raw.encode()).hexdigest()[:12]
+
+
+def mandates_for_agency(agency_name, signals):
+    """prospect_signals rows for one agency, fuzzy-matched on the
+    normalized (slugged) agency name vs the board token, newest first."""
+    from discovery_engine import slug_variants
+    variants = slug_variants(agency_name)
+    if not variants:
+        return []
+    hits = [s for s in signals if s.get("agency") in variants]
+    if not hits:
+        hits = [s for s in signals
+                if any(v in (s.get("agency") or "") or (s.get("agency") or "") in v
+                       for v in variants)]
+    return hits
+
+
+_NICHE_STOPWORDS = {
+    "a", "an", "the", "and", "or", "of", "for", "with", "to", "in", "at",
+    "on", "sr", "jr", "senior", "junior", "lead", "principal", "staff",
+    "head", "chief", "manager", "director", "vp", "intern", "graduate",
+    "trainee", "assistant", "associate", "specialist", "coordinator",
+    "executive", "officer", "remote", "hybrid", "onsite", "on-site",
+    "contract", "permanent", "freelance", "temporary", "temp", "part",
+    "full", "time", "fte", "i", "ii", "iii", "iv", "v", "m", "f", "d",
+    "x", "new", "urgent", "immediate", "role", "position", "job", "jobs",
+    "month", "months", "year", "years", "all", "levels", "level",
+    # Generic role nouns. These are what the person IS, not what they
+    # specialise in — and derived keywords are used as mini-list inclusion
+    # filters, where "engineer" matches essentially every tech posting and
+    # makes the gift generic. Keep technologies and specialisms
+    # (java, devops, sre, backend, security); drop the job-title nouns.
+    "developer", "developers", "engineer", "engineers", "engineering",
+    "software", "programmer", "architect", "analyst", "consultant",
+    "administrator", "admin", "scientist", "technician", "technologist",
+    "professional", "expert", "support", "tech", "technology",
+}
+
+
+# Job-board locations are free text and wildly inconsistent: "Costa Mesa,
+# California, United States", "Hawthorne, CA", "London", "Remote". So a
+# prospect's market has to expand into a bag of tokens that covers the
+# realistic spellings. filter_engine.location_ok does substring matching
+# both directions, so country names, city names and ", XX" state suffixes
+# all work.
+#
+# "remote" is ALWAYS included: a UK agency can absolutely place a candidate
+# at a remote-first company, and excluding those would throw away the
+# single most common location string on the board.
+_MARKETS = {
+    "uk": ["united kingdom", "england", "scotland", "wales", "britain",
+           "london", "manchester", "leeds", "birmingham", "bristol",
+           "edinburgh", "glasgow", "cambridge", "oxford", "reading",
+           "sheffield", "liverpool", "newcastle", "nottingham", "brighton",
+           "cardiff", "belfast", "milton keynes"],
+    "us": ["united states", "usa", "new york", "san francisco", "boston",
+           "austin", "seattle", "chicago", "los angeles", "denver",
+           "atlanta", "dallas", "houston", "miami", "san jose", "palo alto",
+           "mountain view", "san diego", "philadelphia", "portland",
+           "phoenix", "california", "texas", "washington", "virginia",
+           "massachusetts", "colorado", "georgia", "florida", "illinois",
+           ", ny", ", tx", ", wa", ", ma", ", il", ", va", ", fl", ", az",
+           ", or", ", nc", ", pa", ", oh", ", mi", ", mn", ", ut"],
+    "fr": ["france", "paris", "lyon", "toulouse", "bordeaux", "lille",
+           "nantes", "marseille", "grenoble", "sophia antipolis"],
+}
+# ", ca" is deliberately absent: it also matches ", canada". California is
+# covered by the full state name and by its city names instead.
+
+
+# ---------------------------------------------------------------- ICP
+# WHO COUNTS AS A PROSPECT. One definition, edited in the app, read by the
+# prospector when it searches Apollo.
+#
+# It is NOT read by the daily ranking, and that is deliberate: if the
+# prospector only collects 10-50 person agencies, then re-checking "is this
+# 10-50 people?" when ranking filters nothing. A factor belongs in the
+# ranking only if it still varies AFTER this filter has been applied.
+ICP_FILE = DATA_DIR / "icp.json"
+
+ICP_DEFAULTS = {
+    "titles": ["founder", "co-founder", "managing director", "owner",
+               "director"],
+    "keywords": ["staffing", "recruiting", "recruitment",
+                 "talent acquisition", "executive search"],
+    # 2-20 was the original band and it was a mistake: a three-person
+    # agency cannot pay $1,500/month. 10-50 is where the budget starts.
+    "size_min": 10,
+    "size_max": 50,
+    "countries": ["United States", "United Kingdom", "France"],
+}
+
+
+def load_icp():
+    """The current ICP, with every key guaranteed present."""
+    cfg = {}
+    if ICP_FILE.exists():
+        try:
+            cfg = json.loads(ICP_FILE.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            cfg = {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+    for k, v in ICP_DEFAULTS.items():
+        cfg.setdefault(k, list(v) if isinstance(v, list) else v)
+    try:
+        cfg["size_min"] = int(cfg["size_min"])
+        cfg["size_max"] = int(cfg["size_max"])
+    except (TypeError, ValueError):
+        cfg["size_min"], cfg["size_max"] = (ICP_DEFAULTS["size_min"],
+                                            ICP_DEFAULTS["size_max"])
+    if cfg["size_min"] > cfg["size_max"]:
+        cfg["size_min"], cfg["size_max"] = cfg["size_max"], cfg["size_min"]
+    return cfg
+
+
+def save_icp(cfg):
+    ICP_FILE.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+
+
+def icp_size_range(cfg=None) -> str:
+    """Apollo wants the band as the string "min,max"."""
+    cfg = cfg or load_icp()
+    return f"{cfg['size_min']},{cfg['size_max']}"
+
+
+def matches_icp(prospect, cfg=None) -> bool:
+    """Was this row collected under the CURRENT ICP?
+
+    Only used to flag legacy rows — your first 176 came from a 2-20 band —
+    never to rank. Size arrives from Apollo as a bucket ("11-50") or a
+    number, so parse whatever is there and be lenient when it's missing.
+    """
+    cfg = cfg or load_icp()
+    raw = str(prospect.get("size") or "").strip()
+    if not raw:
+        return True                      # unknown size: don't punish it
+    nums = [int(n) for n in re.findall(r"\d+", raw)]
+    if not nums:
+        return True
+    lo, hi = min(nums), max(nums)
+    return not (hi < cfg["size_min"] or lo > cfg["size_max"])
+
+
+def market_tokens(location: str) -> list:
+    """A prospect's location -> location filter for their mini-list.
+
+    A Leeds agency cannot use a list of Toronto companies. Without this the
+    gift ignores geography entirely, which is the fastest way to prove you
+    didn't look at who you're writing to.
+
+    Unknown or blank locations return [] — which filter_engine reads as
+    "anywhere", i.e. the old behaviour. Better a broad list than none.
+    """
+    loc = (location or "").lower()
+    for market, tokens in _MARKETS.items():
+        if any(t in loc for t in tokens):
+            return tokens + ["remote"]
+    return []
+
+
+def derive_niche_keywords(titles, top_n=5):
+    """Most frequent meaningful role keywords across mandate titles —
+    the automatic niche guess for a prospect's mini-list."""
+    from collections import Counter
+    c = Counter()
+    for t in titles:
+        for w in re.findall(r"[a-z0-9.+#]+", str(t or "").lower()):
+            w = w.strip(".")
+            if not w or w.isdigit() or len(w) < 2 or w in _NICHE_STOPWORDS:
+                continue
+            c[w] += 1
+    return [w for w, _ in c.most_common(top_n)]
+
+
+def load_prospects_config():
+    """Prospect DM templates (first touch / follow-up / breakup) —
+    editable on the Prospects page, stored in prospects_config.json."""
+    cfg = {}
+    if PROSPECTS_CONFIG.exists():
+        try:
+            cfg = json.loads(PROSPECTS_CONFIG.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            cfg = {}
+    cfg.setdefault("dm_template", DEFAULT_PROSPECT_DM)
+    cfg.setdefault("followup_template", DEFAULT_PROSPECT_FOLLOWUP)
+    cfg.setdefault("followup2_template", DEFAULT_PROSPECT_FOLLOWUP2)
+    return cfg
+
+
+def save_prospects_config(cfg):
+    PROSPECTS_CONFIG.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+
+
+def render_prospect_dm(template, prospect, hook):
+    contact = prospect.get("person_name", "")
+    first = contact.split()[0] if contact else "there"
+    fields = {
+        "first_name": first,
+        "agency": prospect.get("agency", ""),
+        "hook": hook,
+        "person_title": prospect.get("person_title", ""),
+        "location": prospect.get("location", ""),
+    }
+    try:
+        return template.format(**fields)
+    except (KeyError, IndexError, ValueError):
+        return template
+
+
+# ============================ watchlist ============================
+
+# ============================ watchlist ============================
+
+ATS_URL_PATTERNS = [
+    ("greenhouse", r"greenhouse\.io/embed/job_board\?for=([A-Za-z0-9_-]+)"),
+    ("greenhouse", r"boards-api\.greenhouse\.io/v1/boards/([A-Za-z0-9_-]+)"),
+    ("greenhouse", r"(?:boards|job-boards)\.greenhouse\.io/([A-Za-z0-9_-]+)"),
+    ("lever", r"api\.lever\.co/v0/postings/([A-Za-z0-9_-]+)"),
+    ("lever", r"jobs(?:\.eu)?\.lever\.co/([A-Za-z0-9_-]+)"),
+    ("ashby", r"api\.ashbyhq\.com/posting-api/job-board/([A-Za-z0-9_.%-]+)"),
+    ("ashby", r"jobs\.ashbyhq\.com/([A-Za-z0-9_.%-]+)"),
+    ("workable", r"apply\.workable\.com/api/v1/widget/accounts/([A-Za-z0-9_-]+)"),
+    ("workable", r"apply\.workable\.com/([A-Za-z0-9_-]+)"),
+]
+
+
+def parse_board_url(url: str):
+    """Any job-board URL -> (platform, token) or (None, None)."""
+    url = (url or "").strip()
+    for platform, pat in ATS_URL_PATTERNS:
+        m = re.search(pat, url)
+        if m:
+            token = m.group(1).lower()
+            if token in ("api", "v1", "embed", "widget"):
+                continue
+            return platform, token
+    return None, None
+
+
+def load_watchlist():
+    if WATCHLIST_FILE.exists():
+        try:
+            wl = json.loads(WATCHLIST_FILE.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            wl = {}
+    else:
+        wl = {}
+    return {p: sorted(set(str(t).strip().lower() for t in wl.get(p, []) if str(t).strip()))
+            for p in PLATFORMS}
+
+
+def save_watchlist(wl):
+    WATCHLIST_FILE.write_text(json.dumps(wl, indent=2), encoding="utf-8")
+
+
+def tracked_job_counts():
+    """{platform:token -> live job count} from the engine's state file."""
+    if not STATE_FILE.exists():
+        return {}
+    try:
+        state = json.loads(STATE_FILE.read_text())
+    except json.JSONDecodeError:
+        return {}
+    return {k: len(v) for k, v in state.items()}
+

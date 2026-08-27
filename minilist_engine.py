@@ -125,7 +125,14 @@ def build_minilist(keywords, locations=None, exclusions=None, n=DEFAULT_N,
     for company, hits in by_company.items():
         if ceiling and sizes.get(company, 0) > ceiling:
             continue        # too big for a boutique agency to place at
-        hits.sort(key=lambda h: h["lead_score"], reverse=True)
+        # There is no meaningful "best" role. With no keyword_weights every
+        # job scores 10 per matched keyword and almost every job matches
+        # exactly one: measured on live data, 840 of 843 matched jobs scored
+        # 10, and 90 of 92 companies had ALL their jobs tied. Sorting by
+        # score then picking [0] was dressing up an arbitrary pick.
+        # Sort by score, then title, so at least the output is STABLE —
+        # the same input gives the same list every run.
+        hits.sort(key=lambda h: (-h["lead_score"], h.get("title", "")))
         best = hits[0]
         cs = contacts.get(company) or []
         c = cs[0] if cs else {}
@@ -134,7 +141,10 @@ def build_minilist(keywords, locations=None, exclusions=None, n=DEFAULT_N,
             email = ""
         rows.append({
             "company": company,
+            # An EXAMPLE of what they're hiring, not a ranked pick.
             "hiring_now": best.get("title", ""),
+            "also_hiring": " / ".join(
+                h.get("title", "") for h in hits[1:3]),
             "more_matching_roles": max(len(hits) - 1, 0),
             "location": best.get("location", ""),
             "job_url": best.get("url", ""),
@@ -150,6 +160,31 @@ def build_minilist(keywords, locations=None, exclusions=None, n=DEFAULT_N,
     for r in rows:
         r.pop("_rank")
     return rows[:n]
+
+
+def render_table(rows, limit: int = 10) -> str:
+    """Plain-text table for pasting straight into a DM or email body.
+
+    This is the default way to send a mini-list. Nobody wants an HTML file
+    attached to a cold message — it looks like malware and half of them
+    can't open it on a phone. A short table in the body is readable
+    everywhere, needs no download, and survives being forwarded.
+    """
+    out = []
+    for r in rows[:limit]:
+        line = f"• {r['company']} — {r['hiring_now']}"
+        if r.get("more_matching_roles"):
+            line += f" (+{r['more_matching_roles']} more)"
+        if r.get("location"):
+            line += f" — {r['location']}"
+        if r.get("contact_name"):
+            line += f"\n  → {r['contact_name']}"
+            if r.get("contact_title"):
+                line += f", {r['contact_title']}"
+            if r.get("contact_email"):
+                line += f" · {r['contact_email']}"
+        out.append(line)
+    return "\n".join(out)
 
 
 def render_csv(rows) -> str:

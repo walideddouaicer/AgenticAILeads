@@ -13,16 +13,19 @@ CRM's Help page (`views/help.py`) documents every screen.
 
 ```powershell
 streamlit run app.py                 # the CRM (engines can also be run from its Home page)
+python build_today.py --n 20         # today's outreach queue -> today.json
 python signal_engine.py              # nightly sweep (--baseline on very first run)
 python discovery_engine.py --hn 3    # grow watchlist from HN "Who is hiring" (--names file.txt also works)
-python enrichment_engine.py          # Apollo contact lookup (--probe COMPANY to verify API parsing first)
+python enrichment_engine.py --list-companies --from-minilists   # free, shows targets
+python enrichment_engine.py --from-minilists --limit 25          # the one you usually want
+python enrichment_engine.py --probe COMPANY                      # verify parsing FIRST
 python minilist_engine.py --prospect "Acme" --keywords "java, .net"   # prospect gift list
 
 # own-client prospecting (second pipeline)
 python prospector_engine.py --probe          # ALWAYS before the first real run
 python prospector_engine.py                  # Apollo -> prospects.csv
-python agency_discovery.py --from-prospects  # classify agency boards -> agency_watchlist.json
-python prospect_signal_engine.py             # mandate sweep -> prospect_signals.csv
+python agency_discovery.py --from-prospects --and-sweep  # find agency boards THEN sweep them
+python prospect_signal_engine.py             # mandate sweep alone (rarely needed)
 
 # delivery layer (email tools; all optional, no-op without keys)
 python delivery.py --probe                   # print requests each adapter WOULD send
@@ -32,7 +35,7 @@ python delivery.py --sync-replies            # poll replies -> set stage 'replie
 Verification (no pytest here — this is the house pattern):
 
 ```powershell
-python -m compileall -q app.py common.py views      # must pass (silent = ok)
+python -m compileall -q app.py common.py core.py views   # silent = ok
 # NOT `py_compile ... views/*.py` — py_compile does not expand globs and
 # PowerShell does not expand them for it; that form fails with Errno 22.
 python app.py                                      # bare mode must exit 0
@@ -62,10 +65,22 @@ Two layers connected only through data files in the repo root:
    `discovery_engine.py`, `enrichment_engine.py`, `minilist_engine.py`).
    Each reads/writes specific files and knows nothing about the app.
 2. **CRM** — `app.py` is a thin `st.navigation` entrypoint; one file per
-   page in `views/`; ALL shared code (paths, constants, loaders, stage
-   logic, badges, toast/undo plumbing, the subprocess engine runner,
-   sidebar stats, page-header helper) lives in `common.py`. Pages import it
-   as `import common as C`.
+   page in `views/`. Shared code is split in two:
+   - `core.py` — **Streamlit-free domain logic**: paths, constants, the
+     lead + prospect stores, `lead_key`, the stage machine, follow-up
+     rules, DM rendering, watchlist helpers, delivery bindings. Imports
+     neither streamlit nor common, so scheduled jobs and CLI tools can use
+     it. `tests/test_units.py` enforces that.
+   - `common.py` — **UI glue only**: theme/CSS, toast/undo, the manual
+     contact editor, the engine subprocess runner, sidebar, page headers.
+     It re-exports every public name in `core`, so pages still call
+     `C.lead_key(...)` and nothing in `views/` changed.
+
+   Pages import `import common as C`. New logic that doesn't touch `st.*`
+   belongs in `core.py`. Stage changes go through `common.set_stage()` /
+   `common.mark_followed_up()` (undo snapshot + toast), which wrap
+   `core.apply_stage()` / `core.apply_followup()` (the bare file write,
+   for headless callers).
 
 `filter_engine.evaluate_job()` is the single matching implementation used
 by the sweep, the mini-list, and the config page's live tester/dry-run —
@@ -80,6 +95,21 @@ every run) while history is append-only and irreplaceable. It derives
 it is deliberately **Streamlit-free and common-free**; `common.py` may
 import it, never the reverse. Recording is idempotent per calendar day, so
 a retried sweep cannot inflate counts or invent reposts.
+
+`contacts.py` is the **contact-provider layer** — one adapter per data
+vendor, the same shape `delivery.py` uses for email tools. Streamlit-free
+and common-free; `enrichment_engine` and `prospector_engine` import it,
+never the reverse. Adding a vendor = subclass `ContactProvider`, implement
+`_search()`, append to `PROVIDERS`. Every provider no-ops without its key,
+so the nightly chain stays quiet when nothing is configured. House rule:
+**buy data you can't generate, generate data you can** — job postings we
+generate, verified emails we buy.
+
+`enrichment_engine` picks WHICH companies to enrich, and the default is
+usually wrong: `--from-minilists` targets the companies that actually
+appear in prospect mini-lists (the gift), while the bare default uses
+`signals.csv` (the client-lead pipeline). Those sets differ a lot.
+`--list-companies` prints the target set and spends nothing.
 
 `delivery.py` is the channel-ready email layer: an adapter per tool
 (Manual/Instantly/Smartlead/ApolloSequences) with one shared
@@ -100,7 +130,7 @@ Other local scripts depend on these exact shapes; do not change them:
 |---|---|
 | `signals.csv` | append-only; columns `date,client,platform,company,title,location,score,url,hook` (signal engine + backfill write) |
 | `signals_state.json` | `{"platform:token": {job_id: {title,location,url}}}` (sweep state = the "live jobs" pool) |
-| `job_history.json` | `{"platform:token": {job_id: {first_seen,last_seen,times_seen,repost_count,title_changes,gone_since,th}}}` — written by `sweep_core.record_observations`. **The only file here that cannot be regenerated**; deleting it resets every `days_open`/`repost_count` to zero. Gitignored; back it up separately. |
+| `job_history.json` | `{"platform:token": {job_id: {first_seen,last_seen,times_seen,repost_count,title_changes,gone_since,th,tt}}}` — written by `sweep_core.record_observations`. **The only file here that cannot be regenerated**; deleting it resets every `days_open`/`repost_count` to zero. Gitignored; back it up separately. `tt` (title-only hash) is what detects rewrites — `th` (title+location) is legacy and kept current but unused, because a location re-parse on our side must never look like the company rewriting the req. |
 | `mandate_history.json` | same shape, prospect pipeline (agency mandate ages) |
 | `inbox_status.json` | `{lead_key: {status,on,notes[,fu]}}` (CRM writes; `load_status()` migrates legacy shapes) |
 | `watchlist.json` | `{platform: [tokens]}` (CRM + discovery write) |
@@ -112,6 +142,8 @@ Other local scripts depend on these exact shapes; do not change them:
 | `agency_watchlist.json` | agency boards — NEVER merged into `watchlist.json`, never routed through client configs |
 | `prospect_signals_state.json` / `prospect_signals.csv` | mandate-sweep state + signals (`date,agency,mandate_title,location,url,hook`) |
 | `prospects_status.json` | prospect stages/notes/niche overrides (separate key space from `inbox_status.json`) |
+| `icp.json` | the ICP: titles, keywords, size_min/max, countries. Read by `prospector_engine` when it searches Apollo — NEVER by the daily ranking, because re-checking a filter the list was already built with discriminates nothing. `core.load_icp()` fills defaults; `core.matches_icp()` only flags legacy rows. |
+| `today.json` | `{date,target,items[],bulk[],counts{}}` — written by `build_today.py`, read by `views/today.py`. The page renders it and computes nothing, so the ranking can get smarter without touching the UI. |
 | `prospects_config.json` | prospect DM/follow-up/breakup templates (editable in-app) |
 
 ### Business rules — do not alter
@@ -128,6 +160,16 @@ Other local scripts depend on these exact shapes; do not change them:
   newly added board, records state silently — diffs only alert afterwards.
 - Hooks older than `FRESH_DAYS` (7) degrade from "just opened" to
   "currently hiring" wording (`display_hook`).
+- Prospect niche priority (`views/prospects.py:niche_for`) is
+  **override > live mandates > `prospects.csv` column**. Mandates outrank
+  the CSV on purpose: the column is whatever the source list claimed
+  (scraped marketing copy, for the Clay import), while mandate titles are
+  what the agency is actually working. Evidence beats advertising.
+  `derive_niche_keywords` returns specialisms only — generic role nouns
+  (engineer, developer, software, analyst…) are stopwords, because these
+  keywords become mini-list inclusion filters and "engineer" matches every
+  tech posting. An agency whose mandates are all "Software Engineer"
+  derives nothing and falls through to the stated niche.
 
 ### CRM conventions
 
@@ -185,6 +227,19 @@ app drafts, a human sends.
   `prospector_engine.PROBE_FILE` (the committed test fixture).
 - `watchlist.json` is git-tracked (it's curated state, not runtime output);
   the rest of the runtime data is gitignored.
+- **Console encoding.** The engines print `●`/`—`; a cp1252 console raises
+  `UnicodeEncodeError` mid-loop, before any state is written. This killed
+  the nightly sweep silently for 19 days (2026-07-20 → 08-08). Both `.bat`
+  files set `PYTHONUTF8=1`/`PYTHONIOENCODING=utf-8` and the sweeps call
+  `sweep_core.enable_utf8_stdout()`. Any new engine must do one or both.
+  `sweep_failures.log` exists so a crash is never silent again — if it has
+  recent entries, the sweep is down.
+- Scheduled runs go through `run_sweep.bat` (daily) and `run_weekly.bat`
+  (weekly), registered in Windows Task Scheduler. Both take `.engine.lock`
+  in the same format `common.start_engine` writes, so a scheduled chain and
+  an app-triggered engine can never write `job_history.json` concurrently.
+  Any new scheduled script must do the same. The nightly chain also copies
+  both history files into `backups/` (30 kept) before the sweep runs.
 - On this machine git pushes need `http.sslBackend schannel` (already set
   repo-locally) because a TLS-inspecting proxy/AV breaks Git's bundled CA
   store. The Python equivalent: every networked engine calls

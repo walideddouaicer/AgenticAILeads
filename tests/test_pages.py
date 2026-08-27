@@ -18,10 +18,15 @@ TESTS = Path(__file__).resolve().parent
 ROOT = TESTS.parent
 
 PAGES = [
-    "views/home.py", "views/queue.py", "views/inbox.py",
-    "views/prospects.py", "views/clients.py", "views/minilist.py",
-    "views/watchlist.py", "views/livejobs.py", "views/configs.py",
-    "views/help.py",
+    # Visible by default
+    "views/prospects.py", "views/signals.py",
+    "views/home.py", "views/minilist.py", "views/help.py",
+    # Hidden behind AAL_SHOW_CLIENT_PAGES but still rendered here — they
+    # must keep working for the week client #1 signs.
+    "views/queue.py", "views/inbox.py", "views/clients.py",
+    "views/configs.py",
+    # Superseded by views/signals.py; kept until Help is rewritten.
+    "views/watchlist.py", "views/livejobs.py",
 ]
 
 # ---------------- orchestrator ----------------
@@ -246,6 +251,34 @@ if INTERACT:
     else:
         check("sync-replies disabled when no key",
               sync_btns and sync_btns[0].disabled)
+
+    # ---- Loop A pages are hidden by default, restored by the env flag ----
+    # The four client pages still exist and still render (every entry in
+    # PAGES above is exercised regardless) — only the sidebar entries are
+    # gated. This guards the gate itself: a typo in the env var name would
+    # otherwise either hide them forever or never hide them at all.
+    print("  -- navigation gate --")
+    import importlib
+
+    def nav_titles(show):
+        prev = os.environ.get("AAL_SHOW_CLIENT_PAGES")
+        if show:
+            os.environ["AAL_SHOW_CLIENT_PAGES"] = "1"
+        else:
+            os.environ.pop("AAL_SHOW_CLIENT_PAGES", None)
+        try:
+            import app as app_mod
+            importlib.reload(app_mod)
+            return app_mod.SHOW_CLIENT_PAGES
+        finally:
+            if prev is None:
+                os.environ.pop("AAL_SHOW_CLIENT_PAGES", None)
+            else:
+                os.environ["AAL_SHOW_CLIENT_PAGES"] = prev
+
+    check("client pages hidden by default", nav_titles(False) is False)
+    check("client pages restored by AAL_SHOW_CLIENT_PAGES=1",
+          nav_titles(True) is True)
 
 print()
 if fails:

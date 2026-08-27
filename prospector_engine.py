@@ -48,7 +48,22 @@ from pathlib import Path
 
 import requests
 
-from enrichment_engine import API_URL, MASTER_KEY_HINT, load_api_key
+# Same Apollo endpoint and the same failure mode as contact enrichment —
+# both live in the provider layer so there is one place to fix when a plan
+# or an endpoint changes.
+from contacts import ApolloProvider, load_env_key
+
+API_URL = ApolloProvider.url
+MASTER_KEY_HINT = ApolloProvider.setup_hint
+
+
+def load_api_key() -> str:
+    key = load_env_key("APOLLO_API_KEY", ENV_FILE) or \
+        load_env_key("APOLLO_API_KEY", None)
+    if not key:
+        sys.exit("No API key. Create a .env file containing: "
+                 "APOLLO_API_KEY=your_key")
+    return key
 from tls_compat import enable_os_trust_store
 
 enable_os_trust_store()
@@ -58,13 +73,29 @@ DATA_DIR = Path(os.environ.get("AAL_DATA_DIR", HERE))
 PROSPECTS_CSV = DATA_DIR / "prospects.csv"
 SEEN_FILE = DATA_DIR / "prospects_seen.json"
 PROBE_FILE = HERE / "prospector_probe.json"
+# Stays on HERE, not DATA_DIR: the key belongs to the code checkout, not to
+# whichever data volume AAL_DATA_DIR points at (same rule as
+# enrichment_engine.ENV_FILE).
+ENV_FILE = HERE / ".env"
 
-DEFAULT_TITLES = ["founder", "co-founder", "managing director", "owner",
-                  "director", "principal consultant"]
-DEFAULT_KEYWORDS = ["staffing", "recruiting", "recruitment",
-                    "talent acquisition", "executive search", "headhunting"]
-DEFAULT_SIZE = "2,20"
-DEFAULT_LOCATIONS = ["United States", "United Kingdom", "France"]
+# The ICP lives in icp.json and is edited in the app — see core.load_icp.
+# These are only the fallback when core can't be imported (it always can,
+# but an engine that dies on an import is worse than one that runs with
+# sane defaults). CLI flags still override everything.
+try:
+    from core import icp_size_range, load_icp
+    _ICP = load_icp()
+    DEFAULT_TITLES = list(_ICP["titles"])
+    DEFAULT_KEYWORDS = list(_ICP["keywords"])
+    DEFAULT_SIZE = icp_size_range(_ICP)
+    DEFAULT_LOCATIONS = list(_ICP["countries"])
+except Exception:                                    # pragma: no cover
+    DEFAULT_TITLES = ["founder", "co-founder", "managing director", "owner",
+                      "director"]
+    DEFAULT_KEYWORDS = ["staffing", "recruiting", "recruitment",
+                        "talent acquisition", "executive search"]
+    DEFAULT_SIZE = "10,50"
+    DEFAULT_LOCATIONS = ["United States", "United Kingdom", "France"]
 
 RATE_LIMIT_SLEEP = 2.0     # free tier: 50/min, 600/day — stay far under
 PER_PAGE = 25
@@ -139,8 +170,74 @@ def parse_people(data: dict):
             "email": email,
             "location": location,
             "size": str(org.get("estimated_num_employees") or ""),
+            # Apollo already returns the agency's own blurb and tags; we
+            # were throwing them away and writing niche_keywords blank,
+            # which is the ONE field Clay gave us that Apollo "didn't".
+            # It did — we just didn't read it. See derive_niche_from_org.
+            "niche_keywords": derive_niche_from_org(org),
         })
     return out
+
+
+# Words that appear in every recruitment agency's blurb and therefore
+# distinguish nobody. Without this the derived niche for all of them is
+# "recruitment, talent, staffing".
+_ORG_STOPWORDS = {
+    "recruitment", "recruiting", "recruiter", "recruiters", "staffing",
+    "talent", "acquisition", "search", "headhunting", "headhunters",
+    "consultancy", "consulting", "agency", "agencies", "solutions",
+    "services", "partners", "group", "ltd", "limited", "inc", "llc",
+    "specialists", "specialising", "specializing", "specialists",
+    "leading", "global", "international", "best", "top", "premier",
+    "trusted", "proven", "years", "experience", "clients", "candidates",
+    "people", "team", "teams", "business", "businesses", "companies",
+    "hiring", "jobs", "roles", "placement", "placements", "permanent",
+    "contract", "freelance", "market", "markets", "sector", "sectors",
+    "industry", "industries", "based", "across", "help", "helping",
+    "work", "working", "connect", "connecting", "find", "finding",
+}
+
+
+def derive_niche_from_org(org: dict, top_n: int = 5) -> str:
+    """Agency blurb + Apollo tags -> a comma-separated niche string.
+
+    Reads `short_description`, `keywords` and `industry` — all of which
+    Apollo returns and the old parser ignored. Output goes straight into
+    the niche_keywords column, so a prospector-sourced row arrives with
+    the same field Clay-sourced rows had.
+
+    Known limit, same as Clay's: this is what the agency ADVERTISES, not
+    what it is currently working. Live mandates beat it — that's why
+    niche_for() ranks mandates above this column.
+    """
+    import re as _re
+    from collections import Counter
+
+    # core already knows the role nouns and generic title words; add the
+    # English function words a prose blurb brings that a job title doesn't.
+    from core import _NICHE_STOPWORDS
+    stop = (_ORG_STOPWORDS | _NICHE_STOPWORDS | {
+        "we", "our", "us", "you", "your", "they", "their", "it", "its",
+        "is", "are", "was", "were", "be", "been", "has", "have", "had",
+        "do", "does", "did", "will", "would", "can", "could", "who",
+        "what", "which", "that", "this", "these", "those", "from", "by",
+        "as", "into", "over", "under", "than", "then", "also", "more",
+        "most", "very", "well", "since", "up", "out", "about", "between",
+    })
+
+    text = " ".join(str(x) for x in [
+        org.get("short_description") or "",
+        org.get("industry") or "",
+        " ".join(org.get("keywords") or []) if isinstance(
+            org.get("keywords"), list) else (org.get("keywords") or ""),
+    ])
+    counts = Counter()
+    for w in _re.findall(r"[a-z0-9.+#/]+", text.lower()):
+        w = w.strip("./")
+        if len(w) < 2 or w.isdigit() or w in stop:
+            continue
+        counts[w] += 1
+    return ", ".join(w for w, _ in counts.most_common(top_n))
 
 
 def seen_key(person: dict) -> str:
@@ -236,9 +333,10 @@ def main():
                 skipped += 1
                 continue
             seen[k] = today
+            # niche_keywords now comes from parse_people (derived from the
+            # org blurb); the old blank default would overwrite it.
             new_rows.append({
-                "date_found": today, **person, "source": "apollo",
-                "niche_keywords": "",
+                "date_found": today, "source": "apollo", **person,
             })
             added += 1
         time.sleep(RATE_LIMIT_SLEEP)

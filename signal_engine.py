@@ -29,8 +29,9 @@ from pathlib import Path
 
 import requests
 
-from sweep_core import (load_history, record_observations, save_history,
-                        summarize)
+import sweep_core
+from sweep_core import (enable_utf8_stdout, load_history,
+                        record_observations, save_history, summarize)
 from tls_compat import enable_os_trust_store
 
 enable_os_trust_store()
@@ -95,6 +96,13 @@ CSV_FILE = DATA_DIR / "signals.csv"
 # Unlike STATE_FILE this is never rebuilt from scratch; see sweep_core.
 HISTORY_FILE = DATA_DIR / "job_history.json"
 
+# Greenhouse only returns `offices` (the real city) when content=true, at
+# the cost of shipping every job description too. Worth it: without it,
+# boards that type "Hybrid" into the location box are ungeocodable, and
+# those are some of the largest boards we track. Flip to False if sweeps
+# become too slow.
+GREENHOUSE_CONTENT = True
+
 
 def _get_json(url: str):
     r = requests.get(url, timeout=TIMEOUT, headers=UA)
@@ -106,46 +114,113 @@ def _get_json(url: str):
 
 # --- one fetcher per platform; all return {job_id: normalized_job} or None ---
 
+def _offices(j):
+    """Greenhouse office names — the real city when `location.name` is a
+    working arrangement like 'Hybrid'. Only present with content=true.
+
+    Verified against a live Cloudflare response:
+        "location": {"name": "Hybrid"}
+        "offices": [{"id": 19994, "name": "Washington, DC",
+                     "location": "Washington, DC, United States"}]
+
+    Note `offices[].location` is a plain STRING here, not the {"name": ...}
+    object that the job-level `location` field uses. Prefer it — it carries
+    the country — but fall back to `name`, and never assume either type.
+    """
+    out = []
+    for o in (j.get("offices") or []):
+        if not isinstance(o, dict):
+            continue
+        loc = o.get("location")
+        if isinstance(loc, dict):
+            loc = loc.get("name")
+        out.append(str(loc or o.get("name") or "").strip())
+    # Two is plenty: enough for a multi-site role to match either market,
+    # short enough to stay readable in the table.
+    return ", ".join(x for x in out if x)[:120] if out else ""
+
+
 def fetch_greenhouse(token):
-    data = _get_json(f"https://boards-api.greenhouse.io/v1/boards/{token}/jobs")
+    # content=true costs a bigger payload (it includes the job description)
+    # but is the only way to get `offices`. Without it, boards that type
+    # "Hybrid" or "In-Office" into the location box give us no place at all
+    # — 199 Cloudflare jobs and 274 SpaceX jobs were unusable for geo
+    # matching. Set GREENHOUSE_CONTENT = False if sweeps get too slow.
+    suffix = "?content=true" if GREENHOUSE_CONTENT else ""
+    data = _get_json(
+        f"https://boards-api.greenhouse.io/v1/boards/{token}/jobs{suffix}")
     if data is None:
         return None
-    return {
-        str(j["id"]): {
+    out = {}
+    for j in data.get("jobs", []):
+        raw = (j.get("location") or {}).get("name") or ""
+        place = sweep_core.best_location(raw, _offices(j))
+        _, workplace = sweep_core.split_workplace(raw)
+        out[str(j["id"])] = {
             "title": (j.get("title") or "").strip(),
-            "location": ((j.get("location") or {}).get("name") or ""),
+            # Blank when nothing geographic is recoverable. Repeating
+            # "Hybrid" in a column called `location` is the bug
+            # we are fixing; `workplace` carries that already.
+            "location": place,
+            "workplace": workplace,
             "url": j.get("absolute_url", ""),
         }
-        for j in data.get("jobs", [])
-    }
+    return out
 
 
 def fetch_lever(token):
     data = _get_json(f"https://api.lever.co/v0/postings/{token}?mode=json")
     if data is None:
         return None
-    return {
-        str(j.get("id")): {
+    out = {}
+    for j in data:
+        cats = j.get("categories") or {}
+        raw = cats.get("location") or ""
+        # Lever carries the arrangement separately in workplaceType, and
+        # often a country/allLocations list alongside the display string.
+        all_locs = j.get("allLocations") or cats.get("allLocations") or []
+        place = sweep_core.best_location(
+            raw, ", ".join(x for x in all_locs if isinstance(x, str)),
+            j.get("country") or "")
+        workplace = (j.get("workplaceType") or "").lower()
+        if not workplace:
+            _, workplace = sweep_core.split_workplace(raw)
+        out[str(j.get("id"))] = {
             "title": (j.get("text") or "").strip(),
-            "location": ((j.get("categories") or {}).get("location") or ""),
+            "location": place,
+            "workplace": workplace,
             "url": j.get("hostedUrl", ""),
         }
-        for j in data
-    }
+    return out
 
 
 def fetch_ashby(token):
     data = _get_json(f"https://api.ashbyhq.com/posting-api/job-board/{token}")
     if data is None:
         return None
-    return {
-        str(j.get("id") or j.get("jobUrl") or j.get("title")): {
+    out = {}
+    for j in data.get("jobs", []):
+        raw = j.get("location") or ""
+        # Ashby exposes a structured postal address and a secondary list;
+        # either can name a city when `location` is generic.
+        postal = ((j.get("address") or {}).get("postalAddress") or {})
+        structured = ", ".join(x for x in [
+            postal.get("addressLocality"), postal.get("addressRegion"),
+            postal.get("addressCountry")] if x)
+        secondary = ", ".join(
+            s.get("location", "") for s in (j.get("secondaryLocations") or [])
+            if isinstance(s, dict))
+        place = sweep_core.best_location(raw, structured, secondary)
+        _, workplace = sweep_core.split_workplace(raw)
+        if j.get("isRemote") and not workplace:
+            workplace = "remote"
+        out[str(j.get("id") or j.get("jobUrl") or j.get("title"))] = {
             "title": (j.get("title") or "").strip(),
-            "location": j.get("location") or "",
+            "location": place,
+            "workplace": workplace,
             "url": j.get("jobUrl", ""),
         }
-        for j in data.get("jobs", [])
-    }
+    return out
 
 
 def fetch_workable(token):
@@ -155,10 +230,18 @@ def fetch_workable(token):
     jobs = {}
     for j in data.get("jobs", []):
         jid = str(j.get("shortcode") or j.get("id") or j.get("url"))
-        loc = ", ".join(x for x in [j.get("city"), j.get("country")] if x)
+        # Workable is the well-behaved one: city and country are already
+        # separate fields, so this rarely needs rescuing.
+        loc = ", ".join(x for x in [j.get("city"), j.get("state"),
+                                    j.get("country")] if x)
+        place = sweep_core.best_location(loc, j.get("location") or "")
+        workplace = "remote" if j.get("telecommuting") else ""
+        if not workplace:
+            _, workplace = sweep_core.split_workplace(loc)
         jobs[jid] = {
             "title": (j.get("title") or "").strip(),
-            "location": loc,
+            "location": place,
+            "workplace": workplace,
             "url": j.get("url", ""),
         }
     return jobs
@@ -197,10 +280,46 @@ def load_state():
     return {(k if ":" in k else f"greenhouse:{k}"): v for k, v in state.items()}
 
 
+def probe_board(spec: str):
+    """Fetch ONE board and show what we'd store. Run this before trusting a
+    fetcher change — the four ATS APIs disagree about where the real city
+    lives, and the only way to know is to look.
+
+        python signal_engine.py --probe greenhouse:cloudflare
+    """
+    platform, _, token = spec.partition(":")
+    if platform not in FETCHERS:
+        sys.exit(f"unknown platform {platform!r}; "
+                 f"use one of {', '.join(FETCHERS)}")
+    jobs = FETCHERS[platform](token)
+    if jobs is None:
+        sys.exit(f"board not found: {spec}")
+    print(f"{spec}: {len(jobs)} job(s)\n")
+    blank = sum(1 for j in jobs.values() if not j.get("location"))
+    generic = sum(1 for j in jobs.values()
+                  if sweep_core.split_workplace(
+                      j.get("location", ""))[0] == "")
+    for j in list(jobs.values())[:15]:
+        wp = f"  [{j.get('workplace')}]" if j.get("workplace") else ""
+        print(f"  {j['location'][:44]:<46}{wp:<12} {j['title'][:40]}")
+    print(f"\n  {blank} blank location(s), {generic} still generic "
+          f"(no city recoverable) out of {len(jobs)}")
+    if generic > len(jobs) // 2:
+        print("  [!] most of this board has no recoverable place — the "
+              "company genuinely didn't publish one.")
+
+
 def main():
+    enable_utf8_stdout()
     ap = argparse.ArgumentParser()
     ap.add_argument("--baseline", action="store_true")
+    ap.add_argument("--probe", metavar="PLATFORM:TOKEN",
+                    help="fetch one board and print the locations we'd "
+                         "store, without writing anything")
     args = ap.parse_args()
+
+    if args.probe:
+        return probe_board(args.probe)
 
     state = load_state()
     history = load_history(HISTORY_FILE)

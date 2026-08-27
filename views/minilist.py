@@ -6,7 +6,7 @@ from datetime import date
 import streamlit as st
 
 import common as C
-from minilist_engine import build_minilist, render_csv, render_html, DEFAULT_PITCH
+from minilist_engine import build_minilist, render_csv, render_table, DEFAULT_PITCH
 
 C.page_header("🎁 Mini-List", "minilist")
 
@@ -83,11 +83,7 @@ with d1:
                        help="The list as plain data — paste rows into a DM "
                             "or spreadsheet.")
 with d2:
-    st.download_button(
-        "⬇ Branded one-pager (HTML)",
-        render_html(ml_prospect or "you", ml_rows, ml_pitch),
-        file_name=f"{ml_fname}.html", mime="text/html",
-        width="stretch",
-        help="Open it in a browser and Ctrl+P → PDF for a clean attachment.")
-st.caption("Open the HTML and Ctrl+P → PDF for a clean "
-           "attachment, or paste the top rows straight into a DM.")
+    st.caption("CSV is for when they ask for the full list. The message "
+               "itself should carry the table below.")
+st.markdown("**Paste this into the message**")
+st.code(render_table(ml_rows), language=None)

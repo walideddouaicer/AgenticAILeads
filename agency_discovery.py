@@ -199,6 +199,10 @@ def main():
                     help="explicit candidate slugs, comma-separated")
     ap.add_argument("--limit", type=int, default=200,
                     help="max board fetches this run (default 200)")
+    ap.add_argument("--and-sweep", action="store_true", dest="and_sweep",
+                    help="after updating the watchlist, immediately sweep "
+                         "those boards for mandates (one action instead of "
+                         "two — a board is useless until it's swept)")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--retry-dead", action="store_true",
                     help="re-probe candidates cached as dead/non-agency")
@@ -293,8 +297,26 @@ def main():
                                      encoding="utf-8")
     STATE_FILE.write_text(json.dumps(state, indent=1), encoding="utf-8")
     total = sum(len(wl[p]) for p in PLATFORMS)
-    print(f"agency_watchlist.json updated — {total} agency board(s) watched. "
-          "Sweep them with: python prospect_signal_engine.py")
+    print(f"agency_watchlist.json updated — {total} agency board(s) watched.")
+
+    if not args.and_sweep:
+        print("Sweep them with: python prospect_signal_engine.py")
+        return
+
+    # Finding boards and sweeping them were always two buttons for one
+    # job: a board is worthless until it's swept, and sweeping is
+    # worthless without boards. Chained here so it's one action.
+    #
+    # Note the first sweep of a NEW board baselines silently by design —
+    # so a brand-new board yields hooks on the *second* run, not this one.
+    print("\n--- sweeping the agency boards for mandates ---")
+    import prospect_signal_engine
+    sys.argv = ["prospect_signal_engine.py"]
+    try:
+        prospect_signal_engine.main()
+    except SystemExit as e:                # its main() exits on empty input
+        if e.code:
+            print(f"(mandate sweep stopped: {e.code})")
 
 
 if __name__ == "__main__":

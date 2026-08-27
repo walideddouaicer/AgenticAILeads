@@ -32,8 +32,13 @@ prospector_probe.json
 # the repo, BUT it is the one runtime file that CANNOT be regenerated.
 # Delete it and every days_open / repost_count starts again from zero.
 # Back it up somewhere outside the repo on a schedule.
+icp.json
+today.json
+_bulk_names.txt
 job_history.json
 mandate_history.json
+backups/
+sweep_failures.log
 
 # Generated test data
 tests/fixture_data/

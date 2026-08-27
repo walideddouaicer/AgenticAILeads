@@ -34,8 +34,8 @@ from pathlib import Path
 import requests
 
 from signal_engine import FETCHERS, REQUEST_DELAY_SECONDS
-from sweep_core import (load_history, record_observations, save_history,
-                        summarize)
+from sweep_core import (enable_utf8_stdout, load_history,
+                        record_observations, save_history, summarize)
 from tls_compat import enable_os_trust_store
 
 enable_os_trust_store()
@@ -80,6 +80,7 @@ def load_state():
 
 
 def main():
+    enable_utf8_stdout()
     ap = argparse.ArgumentParser(
         description="Sweep agency boards for new client mandates "
                     "(prospect signals).")

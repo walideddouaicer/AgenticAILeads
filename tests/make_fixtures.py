@@ -77,7 +77,9 @@ with (FIX / "signals.csv").open("w", newline="", encoding="utf-8") as f:
     w.writerows(rows)
 
 # --- statuses across all stages, incl. a follow-up due ---
-import common as C  # noqa: E402  (after env var set)
+# core, not common: lead_key/prospect_key live there now, so building
+# fixtures no longer requires Streamlit to be installed.
+import core as C  # noqa: E402  (after env var set)
 assert str(C.DATA_DIR) == str(FIX), f"DATA_DIR is {C.DATA_DIR}!"
 
 k = lambda i: C.lead_key(rows[i])
@@ -183,6 +185,19 @@ pstatus = {
     pk(3): {"status": "replied", "on": d(1), "notes": "wants the list"},
 }
 (FIX / "prospects_status.json").write_text(json.dumps(pstatus, indent=1))
+
+# today.json — built by the real generator against these fixtures, so the
+# Today page is tested on genuine output rather than a hand-written stub.
+# The empty dir deliberately gets none, which exercises the "no queue yet"
+# state.
+import subprocess  # noqa: E402
+
+_r = subprocess.run(
+    [sys.executable, str(ROOT / "build_today.py"), "--n", "5"],
+    env=dict(os.environ, AAL_DATA_DIR=str(FIX)),
+    capture_output=True, text=True)
+if _r.returncode:
+    print("  [!] build_today failed for fixtures:\n" + _r.stdout + _r.stderr)
 
 print(f"fixtures written: {FIX} ({len(rows)} signals, {len(prospects)} "
       f"prospects, {len(psigs)} mandate signals) and {EMPTY} (empty)")
