@@ -1,8 +1,16 @@
 {
-  "greenhouse": [],
+  "greenhouse": [
+    "future-talent"
+  ],
   "lever": [],
   "ashby": [],
   "workable": [
-    "cybersearch"
+    "cybersearch",
+    "dynamic-search-solutions",
+    "esk-recruitment",
+    "forward-progress-staffing",
+    "greenfield-it-recruitment",
+    "linuxrecruit",
+    "paritas-recruitment"
   ]
 }
