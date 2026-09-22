@@ -23,6 +23,7 @@ from datetime import date
 import streamlit as st
 
 import common as C
+from storage import atomic_write_text
 import sweep_core
 
 C.page_header("📡 Signals", "signals")
@@ -133,7 +134,7 @@ with tab_boards:
                           "above and streams the output at the top of this "
                           "page. Only one engine runs at a time."
                      if not busy else "An engine is already running."):
-            names_file.write_text("\n".join(parsed), encoding="utf-8")
+            atomic_write_text(names_file, "\n".join(parsed))
             if C.start_engine("discover",
                               ["--names", str(names_file), "--limit", cap]):
                 st.rerun()

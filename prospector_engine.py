@@ -38,28 +38,27 @@ Setup: same .env as enrichment_engine.py (APOLLO_API_KEY=..., master key).
 """
 
 import argparse
-import csv
 import json
-import os
 import sys
 import time
 from datetime import date
-from pathlib import Path
 
 import requests
+from storage import (append_csv_unique, atomic_write_json, read_json,
+                     update_json)
 
 # Same Apollo endpoint and the same failure mode as contact enrichment —
 # both live in the provider layer so there is one place to fix when a plan
 # or an endpoint changes.
 from contacts import ApolloProvider, load_env_key
+from runtime import DATA_DIR, ENV_FILE
 
 API_URL = ApolloProvider.url
 MASTER_KEY_HINT = ApolloProvider.setup_hint
 
 
 def load_api_key() -> str:
-    key = load_env_key("APOLLO_API_KEY", ENV_FILE) or \
-        load_env_key("APOLLO_API_KEY", None)
+    key = load_env_key("APOLLO_API_KEY", ENV_FILE)
     if not key:
         sys.exit("No API key. Create a .env file containing: "
                  "APOLLO_API_KEY=your_key")
@@ -68,15 +67,9 @@ from tls_compat import enable_os_trust_store
 
 enable_os_trust_store()
 
-HERE = Path(__file__).resolve().parent
-DATA_DIR = Path(os.environ.get("AAL_DATA_DIR", HERE))
 PROSPECTS_CSV = DATA_DIR / "prospects.csv"
 SEEN_FILE = DATA_DIR / "prospects_seen.json"
-PROBE_FILE = HERE / "prospector_probe.json"
-# Stays on HERE, not DATA_DIR: the key belongs to the code checkout, not to
-# whichever data volume AAL_DATA_DIR points at (same rule as
-# enrichment_engine.ENV_FILE).
-ENV_FILE = HERE / ".env"
+PROBE_FILE = DATA_DIR / "prospector_probe.json"
 
 # The ICP lives in icp.json and is edited in the app — see core.load_icp.
 # These are only the fallback when core can't be imported (it always can,
@@ -250,12 +243,7 @@ def seen_key(person: dict) -> str:
 
 
 def load_seen():
-    if SEEN_FILE.exists():
-        try:
-            return json.loads(SEEN_FILE.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            pass
-    return {}
+    return read_json(SEEN_FILE, default={}, expected_type=dict)
 
 
 def split_csv(s):
@@ -297,7 +285,7 @@ def main():
         err, data = search(api_key, payload)
         if err == "RATE_LIMITED":
             sys.exit("Rate limited (429) — wait a minute and retry.")
-        PROBE_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        atomic_write_json(PROBE_FILE, data, indent=2)
         print("\nRaw response (first 4000 chars — full copy in "
               f"{PROBE_FILE.name}):")
         print(json.dumps(data, indent=2)[:4000])
@@ -343,13 +331,13 @@ def main():
 
     if new_rows:
         # append-only: existing rows (and your edits to them) are never touched
-        new_file = not PROSPECTS_CSV.exists()
-        with PROSPECTS_CSV.open("a", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=FIELDNAMES)
-            if new_file:
-                w.writeheader()
-            w.writerows(new_rows)
-    SEEN_FILE.write_text(json.dumps(seen, indent=1), encoding="utf-8")
+        added = append_csv_unique(
+            PROSPECTS_CSV, new_rows, FIELDNAMES, key=seen_key)
+
+    discovered = {seen_key(row): today for row in new_rows}
+    if discovered:
+        update_json(SEEN_FILE, lambda latest: latest.update(discovered),
+                    default={}, expected_type=dict, indent=1)
 
     print(f"\n{added} new prospect(s) appended to {PROSPECTS_CSV.name} "
           f"({skipped} already known, {calls} API call(s) used).")

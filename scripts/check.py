@@ -68,6 +68,7 @@ def main():
                     ("storage", ["tests/test_storage.py"]),
                     ("runner", ["tests/test_runner.py"]),
                     ("sweep-commit", ["tests/test_sweep_commit.py"]),
+                    ("engine-storage", ["tests/test_engine_storage.py"]),
                     ("delivery", ["tests/test_delivery.py"]),
                     ("pages", ["tests/test_pages.py"]),
                     ("workflow-gaps", ["tests/test_workflow_gaps.py"])]

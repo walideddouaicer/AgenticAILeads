@@ -32,16 +32,14 @@ Usage:
 """
 
 import argparse
-import json
-import os
 import sys
 from collections import Counter
 from datetime import date
-from pathlib import Path
 
 import core
 from filter_engine import location_ok
 from minilist_engine import DEFAULT_PITCH, build_minilist
+from storage import atomic_write_json
 from sweep_core import enable_utf8_stdout
 
 DATA_DIR = core.DATA_DIR
@@ -315,7 +313,7 @@ def main():
         print("\nDry run — today.json not written.")
         return
 
-    TODAY_FILE.write_text(json.dumps(data, indent=1), encoding="utf-8")
+    atomic_write_json(TODAY_FILE, data, indent=1)
     print(f"\nWrote {TODAY_FILE.name}. Open the CRM's Today page and send.")
 
 

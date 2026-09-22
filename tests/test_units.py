@@ -333,6 +333,19 @@ def t_provider_noop_without_key():
     assert found == [] and raw is None
 
 
+def t_provider_process_key_overrides_env_file():
+    import contacts
+    with tempfile.NamedTemporaryFile("w", suffix=".env", delete=False) as stream:
+        stream.write("APOLLO_API_KEY=file-key\n")
+        path = stream.name
+    os.environ["APOLLO_API_KEY"] = "process-key"
+    try:
+        assert contacts.load_env_key("APOLLO_API_KEY", path) == "process-key"
+    finally:
+        os.environ.pop("APOLLO_API_KEY", None)
+        Path(path).unlink(missing_ok=True)
+
+
 def t_provider_dry_run_builds_payload():
     """--probe/dry-run must show the request without sending it."""
     import contacts
@@ -368,6 +381,7 @@ def t_companies_from_arg():
 
 check("contacts.py stays a clean vendor layer", t_contacts_is_layer_clean)
 check("provider no-ops without a key", t_provider_noop_without_key)
+check("process credential overrides .env", t_provider_process_key_overrides_env_file)
 check("provider dry-run builds the payload", t_provider_dry_run_builds_payload)
 check("provider parsing is defensive", t_parse_people_defensive)
 check("--companies parses list and file", t_companies_from_arg)

@@ -43,7 +43,6 @@ AAL_DATA_DIR relocates the data directory (tests, container deploy).
 import csv
 import hashlib
 import json
-import os
 import re
 from datetime import date, datetime
 from pathlib import Path
@@ -53,9 +52,8 @@ import delivery
 from filter_engine import DEFAULTS
 from storage import (DELETE, UNSET, atomic_write_json, read_json, revision,
                      update_json, update_json_record)
+from runtime import DATA_DIR, ENV_FILE, HERE
 
-HERE = Path(__file__).resolve().parent
-DATA_DIR = Path(os.environ.get("AAL_DATA_DIR", HERE))
 CONFIG_DIR = DATA_DIR / "configs"
 SIGNALS_CSV = DATA_DIR / "signals.csv"
 ENRICHED_CSV = DATA_DIR / "enriched_signals.csv"
@@ -64,7 +62,6 @@ STATE_FILE = DATA_DIR / "signals_state.json"
 INBOX_STATUS = DATA_DIR / "inbox_status.json"
 WATCHLIST_FILE = DATA_DIR / "watchlist.json"
 DISCOVERY_STATE = DATA_DIR / "discovery_state.json"
-ENV_FILE = DATA_DIR / ".env"
 
 # --- own-client prospecting (separate pipeline, separate files) ---
 PROSPECTS_CSV = DATA_DIR / "prospects.csv"

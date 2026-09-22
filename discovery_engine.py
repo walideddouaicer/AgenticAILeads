@@ -33,8 +33,6 @@ run after.
 
 import argparse
 import html
-import json
-import os
 import re
 import sys
 import time
@@ -44,12 +42,12 @@ from pathlib import Path
 
 import requests
 
+from runtime import DATA_DIR
+from storage import atomic_write_json, read_json, update_json
 from tls_compat import enable_os_trust_store
 
 enable_os_trust_store()
 
-HERE = Path(__file__).resolve().parent
-DATA_DIR = Path(os.environ.get("AAL_DATA_DIR", HERE))
 WATCHLIST_FILE = DATA_DIR / "watchlist.json"
 STATE_FILE = DATA_DIR / "discovery_state.json"
 
@@ -97,11 +95,7 @@ def load_state():
     """{'dead': {'greenhouse:acme' | '*:slug': 'YYYY-MM-DD'}} — expired
     entries are dropped on load so they get re-probed."""
     state = {"dead": {}}
-    if STATE_FILE.exists():
-        try:
-            state.update(json.loads(STATE_FILE.read_text(encoding="utf-8")))
-        except json.JSONDecodeError:
-            pass
+    state.update(read_json(STATE_FILE, default={}, expected_type=dict))
     cutoff = (date.today() - timedelta(days=DEAD_RETRY_DAYS)).isoformat()
     state["dead"] = {k: d for k, d in state.get("dead", {}).items()
                      if d >= cutoff}
@@ -109,16 +103,11 @@ def load_state():
 
 
 def save_state(state):
-    STATE_FILE.write_text(json.dumps(state, indent=1), encoding="utf-8")
+    atomic_write_json(STATE_FILE, state, indent=1)
 
 
 def load_watchlist():
-    wl = {}
-    if WATCHLIST_FILE.exists():
-        try:
-            wl = json.loads(WATCHLIST_FILE.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            print("  [!] watchlist.json unreadable — starting from empty")
+    wl = read_json(WATCHLIST_FILE, default={}, expected_type=dict)
     for p in PLATFORMS:
         wl.setdefault(p, [])
     return wl
@@ -336,11 +325,17 @@ def main():
         print("(dry run — nothing written)")
         return
 
-    for platform, token, _, _ in found:
-        wl[platform].append(token)
-    for p in PLATFORMS:
-        wl[p] = sorted(set(wl[p]))
-    WATCHLIST_FILE.write_text(json.dumps(wl, indent=2), encoding="utf-8")
+    def merge_watchlist(latest):
+        for p in PLATFORMS:
+            latest.setdefault(p, [])
+        for platform, token, _, _ in found:
+            latest[platform].append(token)
+        for p in PLATFORMS:
+            latest[p] = sorted(set(latest[p]))
+        return latest
+
+    wl = update_json(WATCHLIST_FILE, merge_watchlist, default={},
+                     expected_type=dict, indent=2)
     save_state(state)
     total = sum(len(wl[p]) for p in PLATFORMS)
     print(f"watchlist.json updated — now watching {total} companies.")

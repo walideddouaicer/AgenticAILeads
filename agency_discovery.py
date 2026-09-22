@@ -35,8 +35,6 @@ New agency boards are baselined silently on the next prospect sweep.
 
 import argparse
 import csv
-import json
-import os
 import sys
 import time
 from datetime import date, timedelta
@@ -45,13 +43,13 @@ from pathlib import Path
 import requests
 
 from discovery_engine import slug_variants
+from runtime import DATA_DIR
 from signal_engine import FETCHERS
+from storage import atomic_write_json, read_json, update_json
 from tls_compat import enable_os_trust_store
 
 enable_os_trust_store()
 
-HERE = Path(__file__).resolve().parent
-DATA_DIR = Path(os.environ.get("AAL_DATA_DIR", HERE))
 AGENCY_WATCHLIST_FILE = DATA_DIR / "agency_watchlist.json"
 STATE_FILE = DATA_DIR / "agency_discovery_state.json"
 PROSPECTS_CSV = DATA_DIR / "prospects.csv"
@@ -152,11 +150,7 @@ def is_probable_agency(name_or_token: str, jobs: dict) -> tuple[bool, str]:
 
 def load_state():
     state = {"dead": {}, "not_agency": {}}
-    if STATE_FILE.exists():
-        try:
-            state.update(json.loads(STATE_FILE.read_text(encoding="utf-8")))
-        except json.JSONDecodeError:
-            pass
+    state.update(read_json(STATE_FILE, default={}, expected_type=dict))
     cutoff = (date.today() - timedelta(days=DEAD_RETRY_DAYS)).isoformat()
     for k in ("dead", "not_agency"):
         state[k] = {kk: d for kk, d in state.get(k, {}).items() if d >= cutoff}
@@ -164,12 +158,7 @@ def load_state():
 
 
 def load_agency_watchlist():
-    wl = {}
-    if AGENCY_WATCHLIST_FILE.exists():
-        try:
-            wl = json.loads(AGENCY_WATCHLIST_FILE.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            print("  [!] agency_watchlist.json unreadable — starting empty")
+    wl = read_json(AGENCY_WATCHLIST_FILE, default={}, expected_type=dict)
     for p in PLATFORMS:
         wl.setdefault(p, [])
     return wl
@@ -179,8 +168,9 @@ def prospect_agency_names():
     if not PROSPECTS_CSV.exists():
         sys.exit("prospects.csv not found — run prospector_engine.py first "
                  "(or use --names / --slugs).")
-    names = {r.get("agency", "").strip()
-             for r in csv.DictReader(PROSPECTS_CSV.open(encoding="utf-8"))}
+    with PROSPECTS_CSV.open(newline="", encoding="utf-8") as stream:
+        names = {r.get("agency", "").strip()
+                 for r in csv.DictReader(stream)}
     return sorted(n for n in names if n)
 
 
@@ -289,13 +279,18 @@ def main():
         print("(dry run — nothing written)")
         return
 
-    for platform, token in found:
-        wl[platform].append(token)
-    for p in PLATFORMS:
-        wl[p] = sorted(set(wl[p]))
-    AGENCY_WATCHLIST_FILE.write_text(json.dumps(wl, indent=2),
-                                     encoding="utf-8")
-    STATE_FILE.write_text(json.dumps(state, indent=1), encoding="utf-8")
+    def merge_watchlist(latest):
+        for p in PLATFORMS:
+            latest.setdefault(p, [])
+        for platform, token in found:
+            latest[platform].append(token)
+        for p in PLATFORMS:
+            latest[p] = sorted(set(latest[p]))
+        return latest
+
+    wl = update_json(AGENCY_WATCHLIST_FILE, merge_watchlist, default={},
+                     expected_type=dict, indent=2)
+    atomic_write_json(STATE_FILE, state, indent=1)
     total = sum(len(wl[p]) for p in PLATFORMS)
     print(f"agency_watchlist.json updated — {total} agency board(s) watched.")
 

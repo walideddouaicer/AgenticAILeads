@@ -29,15 +29,14 @@ work them from the Prospects page, which is DM-first anyway. Pass
 
 import argparse
 import csv
-import json
-import os
 import re
 import sys
 from datetime import date
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-DATA_DIR = Path(os.environ.get("AAL_DATA_DIR", HERE))
+from storage import append_csv_unique, read_json, update_json
+from runtime import DATA_DIR
+
 PROSPECTS_CSV = DATA_DIR / "prospects.csv"
 SEEN_FILE = DATA_DIR / "prospects_seen.json"
 
@@ -68,14 +67,7 @@ def seen_key(person: dict) -> str:
 
 
 def load_seen():
-    if SEEN_FILE.exists():
-        try:
-            return json.loads(SEEN_FILE.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            print(f"WARNING: {SEEN_FILE.name} is corrupt — treating as empty. "
-                  "Duplicates may be appended; check the CSV afterwards.",
-                  file=sys.stderr)
-    return {}
+    return read_json(SEEN_FILE, default={}, expected_type=dict)
 
 
 def clean(value) -> str:
@@ -189,18 +181,17 @@ def main():
         print("\nNothing to import.")
         return
 
-    # Append-only. Existing rows, and any edits made to them, are untouched.
-    new_file = not PROSPECTS_CSV.exists()
-    with PROSPECTS_CSV.open("a", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=FIELDNAMES)
-        if new_file:
-            w.writeheader()
-        w.writerows(new_rows)
+    # Existing rows and manual edits are preserved; a retry after a crash
+    # deduplicates by the same identity used by prospects_seen.json.
+    added = append_csv_unique(
+        PROSPECTS_CSV, new_rows, FIELDNAMES, key=seen_key)
+    discovered = {seen_key(row): today for row in new_rows}
+    update_json(SEEN_FILE, lambda latest: latest.update(discovered),
+                default={}, expected_type=dict, indent=1)
 
-    SEEN_FILE.write_text(json.dumps(seen, indent=1), encoding="utf-8")
-
-    print(f"\n{len(new_rows)} prospect(s) appended to {PROSPECTS_CSV.name}; "
-          f"{SEEN_FILE.name} now holds {len(seen)} key(s) (was {before}).")
+    latest_seen = load_seen()
+    print(f"\n{added} prospect(s) appended to {PROSPECTS_CSV.name}; "
+          f"{SEEN_FILE.name} now holds {len(latest_seen)} key(s) (was {before}).")
     print("Next: open the CRM's Prospects page — the new rows arrive at "
           "stage 'new' and enter the follow-up rotation once contacted.")
 

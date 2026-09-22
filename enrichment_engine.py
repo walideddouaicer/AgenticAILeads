@@ -49,35 +49,29 @@ match quality a lot:  {"gitlab": "gitlab.com", "huggingface": "huggingface.co"}
 import argparse
 import csv
 import json
-import os
 import sys
 import time
 from pathlib import Path
 
 import contacts as contacts_api
+from runtime import DATA_DIR, ENV_FILE
+from storage import (atomic_write_text, read_json, render_csv,
+                     update_json_record)
 from tls_compat import enable_os_trust_store
 
 enable_os_trust_store()
 
-HERE = Path(__file__).resolve().parent
-DATA_DIR = Path(os.environ.get("AAL_DATA_DIR", HERE))
 SIGNALS_CSV = DATA_DIR / "signals.csv"
 OUT_CSV = DATA_DIR / "enriched_signals.csv"
 CACHE_FILE = DATA_DIR / "enriched_contacts.json"
 DOMAINS_FILE = DATA_DIR / "company_domains.json"
-ENV_FILE = HERE / ".env"
 
 RATE_LIMIT_SLEEP = 2.0     # free tier: 50/min, 600/day — stay far under
 CONTACTS_PER_COMPANY = contacts_api.CONTACTS_PER_COMPANY
 
 
 def load_json(path: Path, default):
-    if path.exists():
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            pass
-    return default
+    return read_json(path, default=default, expected_type=type(default))
 
 
 # ------------------------- which companies -------------------------
@@ -86,7 +80,8 @@ def companies_from_signals() -> list:
     """Distinct companies in signals.csv — the client-lead pipeline."""
     if not SIGNALS_CSV.exists():
         sys.exit("signals.csv not found — run signal_engine.py first.")
-    rows = list(csv.DictReader(SIGNALS_CSV.open(encoding="utf-8")))
+    with SIGNALS_CSV.open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
     if not rows:
         sys.exit("signals.csv is empty.")
     return sorted({r["company"] for r in rows if r.get("company")})
@@ -209,7 +204,7 @@ def main():
         return
 
     cache = load_json(CACHE_FILE, {})
-    todo = [c for c in companies if c not in cache]
+    todo = [c for c in companies if not cache.get(c)]
     print(f"provider: {provider.name} | source: {source}")
     print(f"{len(companies)} company/companies — {len(todo)} need enrichment "
           f"(rest already cached, never re-queried)")
@@ -230,13 +225,17 @@ def main():
         if found == contacts_api.RATE_LIMITED:
             print("  [!] rate limited — stopping, re-run later.")
             break
-        cache[company] = found
+        if found:
+            _, saved, _ = update_json_record(
+                CACHE_FILE, company,
+                lambda current: found if not current else current)
+            cache[company] = saved
         label = (f"{len(found)} contact(s)" if found
-                 else "ZERO contacts (check name/domain)")
+                 else "ZERO contacts (not cached; check name/domain)")
         print(f"  {company}: {label}")
         time.sleep(RATE_LIMIT_SLEEP)
 
-    CACHE_FILE.write_text(json.dumps(cache, indent=2), encoding="utf-8")
+    cache = load_json(CACHE_FILE, {})
     hit = sum(1 for c in companies if cache.get(c))
     print(f"\ncache: {hit}/{len(companies)} target companies now have "
           f"contacts ({len(cache)} total in {CACHE_FILE.name})")
@@ -246,7 +245,8 @@ def main():
         return
 
     # Merge contacts into every signal row
-    rows = list(csv.DictReader(SIGNALS_CSV.open(encoding="utf-8")))
+    with SIGNALS_CSV.open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
     if not rows:
         return
     fieldnames = list(rows[0].keys())
@@ -256,15 +256,12 @@ def main():
             if col not in fieldnames:
                 fieldnames.append(col)
 
-    with OUT_CSV.open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=fieldnames)
-        w.writeheader()
-        for r in rows:
-            contacts = cache.get(r["company"], [])
-            for i, c in enumerate(contacts[:CONTACTS_PER_COMPANY], 1):
-                for k, v in c.items():
-                    r[f"contact{i}_{k}"] = v
-            w.writerow(r)
+    for r in rows:
+        contacts = cache.get(r["company"], [])
+        for i, c in enumerate(contacts[:CONTACTS_PER_COMPANY], 1):
+            for k, v in c.items():
+                r[f"contact{i}_{k}"] = v
+    atomic_write_text(OUT_CSV, render_csv(rows, fieldnames))
 
     print(f"\nWrote {OUT_CSV.name} ({len(rows)} rows). "
           f"API calls used this run: {calls}")

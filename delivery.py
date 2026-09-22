@@ -46,9 +46,9 @@ from pathlib import Path
 
 import requests
 
+from runtime import ENV_FILE
 from tls_compat import enable_os_trust_store
 
-HERE = Path(__file__).resolve().parent
 TIMEOUT = 20
 
 INSTANTLY_BASE = "https://api.instantly.ai/api/v2"
@@ -65,7 +65,7 @@ def load_env_key(name, env_file=None):
     v = os.environ.get(name)
     if v and v.strip():
         return v.strip()
-    path = Path(env_file) if env_file else (HERE / ".env")
+    path = Path(env_file) if env_file else ENV_FILE
     if path.exists():
         try:
             for line in path.read_text(encoding="utf-8",

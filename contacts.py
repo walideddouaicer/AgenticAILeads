@@ -37,6 +37,7 @@ from pathlib import Path
 
 import requests
 
+from runtime import ENV_FILE
 from tls_compat import enable_os_trust_store
 
 enable_os_trust_store()
@@ -56,7 +57,10 @@ RATE_LIMITED = "RATE_LIMITED"
 
 
 def load_env_key(name: str, env_file=None) -> str:
-    """Read a key from .env, falling back to the process environment."""
+    """Read a process key, falling back to the configured .env file."""
+    value = os.environ.get(name, "").strip()
+    if value:
+        return value
     env_file = Path(env_file) if env_file else None
     if env_file and env_file.exists():
         for line in env_file.read_text(encoding="utf-8").splitlines():
@@ -66,7 +70,7 @@ def load_env_key(name: str, env_file=None) -> str:
             k, _, v = line.partition("=")
             if k.strip() == name:
                 return v.strip().strip('"').strip("'")
-    return os.environ.get(name, "")
+    return ""
 
 
 def parse_people(data: dict, limit: int = CONTACTS_PER_COMPANY):
@@ -207,14 +211,13 @@ def active_provider(env_file=None, dry_run=False):
 
 if __name__ == "__main__":
     import sys
-    env = Path(__file__).resolve().parent / ".env"
     print("Contact providers:")
-    for p in all_providers(env_file=env):
+    for p in all_providers(env_file=ENV_FILE):
         state = "configured" if p.is_configured() else f"no {p.key_env}"
         print(f"  {p.name:<10} {state}")
     company = sys.argv[1] if len(sys.argv) > 1 else None
     if company:
-        prov = active_provider(env_file=env)
+        prov = active_provider(env_file=ENV_FILE)
         if not prov:
             sys.exit("No provider configured — set a key in .env")
         contacts, raw = prov.find_contacts(company)

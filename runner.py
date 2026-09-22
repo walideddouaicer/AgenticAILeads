@@ -7,16 +7,14 @@ import argparse
 from datetime import datetime, timezone
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 import uuid
 
 from storage import FileLock, LockBusy, atomic_write_json, read_json, update_json
+from runtime import DATA_DIR, HERE
 
 
-HERE = Path(__file__).resolve().parent
-DATA_DIR = Path(os.environ.get("AAL_DATA_DIR", HERE))
 ENGINE_LOCK = DATA_DIR / ".engine.lock"
 RUN_STATUS = DATA_DIR / "run_status.json"
 
@@ -122,16 +120,32 @@ def engine_busy():
 def backup_histories(keep=30):
     backup_dir = DATA_DIR / "backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y-%m-%dT%H%M%S")
+    stamp = datetime.now().strftime("%Y-%m-%dT%H%M%S.%f")
     for name in ("job_history.json", "mandate_history.json"):
         source = DATA_DIR / name
         if source.exists():
             target = backup_dir / f"{source.stem}_{stamp}.json"
-            shutil.copy2(source, target)
+            atomic_write_json(
+                target, read_json(source, expected_type=dict), indent=2)
     for stem in ("job_history", "mandate_history"):
         files = sorted(backup_dir.glob(f"{stem}_*.json"), reverse=True)
         for old in files[keep:]:
             old.unlink()
+
+
+def restore_history_backup(source, destination):
+    """Validate and restore one history backup, preserving the current file."""
+    source, destination = Path(source), Path(destination)
+    if source.resolve() == destination.resolve():
+        raise ValueError("backup and destination must be different files")
+    restored = read_json(source, expected_type=dict)
+    if destination.exists():
+        current = read_json(destination, expected_type=dict)
+        backup_dir = DATA_DIR / "backups"
+        stamp = datetime.now().strftime("%Y-%m-%dT%H%M%S.%f")
+        emergency = backup_dir / f"{destination.stem}_pre_restore_{stamp}.json"
+        atomic_write_json(emergency, current, indent=2)
+    atomic_write_json(destination, restored, indent=2)
 
 
 def run_chain(name):
@@ -170,8 +184,17 @@ def main():
     one.add_argument("args", nargs=argparse.REMAINDER)
     chain = sub.add_parser("chain", help="run a refresh chain")
     chain.add_argument("name", choices=sorted(CHAINS))
+    restore = sub.add_parser("restore-history", help="restore a validated backup")
+    restore.add_argument("backup", type=Path)
+    restore.add_argument("target", choices=("job", "mandate"))
     args = parser.parse_args()
     try:
+        if args.action == "restore-history":
+            name = ("job_history.json" if args.target == "job"
+                    else "mandate_history.json")
+            restore_history_backup(args.backup, DATA_DIR / name)
+            print(f"Restored {name} from {args.backup}")
+            return 0
         if args.action == "chain":
             return run_chain(args.name)
         running = start_locked_process(

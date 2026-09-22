@@ -24,17 +24,15 @@ import argparse
 import csv
 import html
 import io
-import json
-import os
 import re
 import sys
 from datetime import date
 from pathlib import Path
 
 from filter_engine import evaluate_job
+from runtime import DATA_DIR
+from storage import atomic_write_text, read_json
 
-HERE = Path(__file__).resolve().parent
-DATA_DIR = Path(os.environ.get("AAL_DATA_DIR", HERE))
 STATE_FILE = DATA_DIR / "signals_state.json"
 CONTACTS_FILE = DATA_DIR / "enriched_contacts.json"
 OUT_DIR = DATA_DIR / "minilists"
@@ -62,12 +60,7 @@ DEFAULT_PITCH = ("Want 50 more of these per week — with the meetings already "
 
 
 def _load_json(path: Path, default):
-    if path.exists():
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            pass
-    return default
+    return read_json(path, default=default, expected_type=type(default))
 
 
 def tracked_jobs(state_file: Path = STATE_FILE):
@@ -309,9 +302,9 @@ def main():
     OUT_DIR.mkdir(exist_ok=True)
     slug = re.sub(r"[^a-z0-9]+", "-", args.prospect.lower()).strip("-") or "prospect"
     base = OUT_DIR / f"minilist_{slug}_{date.today().isoformat()}"
-    Path(f"{base}.csv").write_text(render_csv(rows), encoding="utf-8")
-    Path(f"{base}.html").write_text(render_html(args.prospect, rows, args.pitch),
-                                    encoding="utf-8")
+    atomic_write_text(Path(f"{base}.csv"), render_csv(rows))
+    atomic_write_text(
+        Path(f"{base}.html"), render_html(args.prospect, rows, args.pitch))
     with_contact = sum(1 for r in rows if r["contact_name"])
     print(f"{len(rows)} companies ({with_contact} with named contacts)")
     print(f"  -> {base}.csv")

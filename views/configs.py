@@ -1,13 +1,13 @@
 """Client Configs — profiles, live tester, dry-run, backfill."""
 
-import csv
-import json
+import re
 from datetime import date
 
 import streamlit as st
 
 import common as C
 from filter_engine import evaluate_job, DEFAULTS
+from storage import append_csv_unique, atomic_write_json
 
 C.page_header("⚙️ Client Configs", "configs")
 
@@ -137,11 +137,13 @@ with col_form:
         if st.button("💾 Save profile", type="primary", width="stretch",
                      help="Writes configs/<client_id>.json. Takes effect on "
                           "the next sweep."):
-            if not new_cfg["client_id"] or " " in new_cfg["client_id"]:
-                st.error("Client ID is required and must have no spaces.")
+            if not re.fullmatch(r"[A-Za-z0-9_-]+", new_cfg["client_id"]):
+                st.error("Client ID may contain letters, numbers, hyphens, "
+                         "and underscores only.")
             else:
-                (C.CONFIG_DIR / f"{new_cfg['client_id']}.json").write_text(
-                    json.dumps(new_cfg, indent=2), encoding="utf-8")
+                atomic_write_json(
+                    C.CONFIG_DIR / f"{new_cfg['client_id']}.json",
+                    new_cfg, indent=2)
                 C.push_toast(f"Saved configs/{new_cfg['client_id']}.json", "💾")
                 st.rerun()
     with s2:
@@ -221,31 +223,21 @@ with col_test:
                                   "as leads for this client, so a new client "
                                   "doesn't wait for future diffs. Safe to "
                                   "re-run — duplicates are skipped."):
-                    existing = set()
-                    if C.SIGNALS_CSV.exists():
-                        for r in csv.DictReader(C.SIGNALS_CSV.open(encoding="utf-8")):
-                            existing.add((r.get("client", ""), r.get("company", ""),
-                                          r.get("title", "")))
                     fieldnames = ["date", "client", "platform", "company", "title",
                                   "location", "score", "url", "hook"]
-                    new_file = not C.SIGNALS_CSV.exists()
-                    added = 0
-                    with C.SIGNALS_CSV.open("a", newline="", encoding="utf-8") as f:
-                        w = csv.DictWriter(f, fieldnames=fieldnames)
-                        if new_file:
-                            w.writeheader()
-                        for h in hits:
-                            if (cid, h["company"], h["title"]) in existing:
-                                continue
-                            w.writerow({
-                                "date": date.today().isoformat(), "client": cid,
-                                "platform": h["platform"], "company": h["company"],
-                                "title": h["title"], "location": h["location"],
-                                "score": "", "url": h["url"],
-                                "hook": f"saw you're currently hiring a {h['title']}"
-                                        + (f" in {h['location']}" if h["location"] else ""),
-                            })
-                            added += 1
+                    rows = [{
+                        "date": date.today().isoformat(), "client": cid,
+                        "platform": h["platform"], "company": h["company"],
+                        "title": h["title"], "location": h["location"],
+                        "score": "", "url": h["url"],
+                        "hook": f"saw you're currently hiring a {h['title']}"
+                                + (f" in {h['location']}" if h["location"] else ""),
+                    } for h in hits]
+                    added = append_csv_unique(
+                        C.SIGNALS_CSV, rows, fieldnames,
+                        key=lambda row: (
+                            row.get("client", ""), row.get("company", ""),
+                            row.get("title", "")))
                     st.success(f"Backfilled {added} lead(s) to {cid} "
                                f"({len(hits) - added} duplicates skipped). "
                                "Check the Inbox / their client page.")

@@ -103,6 +103,29 @@ def test_chain_exception_records_failure_and_releases_lock():
             runner.ENGINE_LOCK, runner.RUN_STATUS = old_lock, old_status
 
 
+def test_history_backup_can_be_restored_without_losing_current_copy():
+    with tempfile.TemporaryDirectory() as directory:
+        directory = Path(directory)
+        old_data = runner.DATA_DIR
+        runner.DATA_DIR = directory
+        history = directory / "job_history.json"
+        storage.atomic_write_json(history, {"original": {}})
+        try:
+            runner.backup_histories()
+            backup = next((directory / "backups").glob("job_history_*.json"))
+            storage.atomic_write_json(history, {"current": {}})
+            runner.restore_history_backup(backup, history)
+            assert storage.read_json(history, expected_type=dict) == {
+                "original": {}}
+            emergency = list((directory / "backups").glob(
+                "job_history_pre_restore_*.json"))
+            assert len(emergency) == 1
+            assert storage.read_json(emergency[0], expected_type=dict) == {
+                "current": {}}
+        finally:
+            runner.DATA_DIR = old_data
+
+
 def main():
     tests = [value for name, value in sorted(globals().items())
              if name.startswith("test_") and callable(value)]

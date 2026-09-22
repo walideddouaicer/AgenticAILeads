@@ -20,15 +20,14 @@ How to find board tokens (Google these, token is in the result URLs):
 
 import argparse
 import json
-import os
 import sys
 import time
 from datetime import date
-from pathlib import Path
 
 import requests
 
 import sweep_core
+from runtime import DATA_DIR
 from sweep_core import (commit_sweep_batch, enable_utf8_stdout, load_history,
                         load_json_state, record_observations,
                         recover_sweep_checkpoint, summarize)
@@ -59,7 +58,6 @@ _FALLBACK_WATCHLIST = {
     "workable": ["huggingface"],
 }
 
-DATA_DIR = Path(os.environ.get("AAL_DATA_DIR", Path(__file__).resolve().parent))
 _WATCHLIST_FILE = DATA_DIR / "watchlist.json"
 
 
@@ -89,7 +87,6 @@ UA = {"User-Agent": "signal-engine/0.2 (polite nightly sweep)"}
 
 # ----------------------------------------------------------------------
 
-HERE = Path(__file__).resolve().parent
 STATE_FILE = DATA_DIR / "signals_state.json"
 CSV_FILE = DATA_DIR / "signals.csv"
 # Append-only job history — days_open / repost_count / rewritten live here.

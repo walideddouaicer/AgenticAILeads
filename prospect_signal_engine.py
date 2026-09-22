@@ -24,15 +24,14 @@ separate state, separate CSV; nothing here touches client configs.
 
 import argparse
 import json
-import os
 import sys
 import time
 from datetime import date
-from pathlib import Path
 
 import requests
 
 from signal_engine import FETCHERS, REQUEST_DELAY_SECONDS
+from runtime import DATA_DIR
 from sweep_core import (commit_sweep_batch, enable_utf8_stdout, load_history,
                         load_json_state, record_observations,
                         recover_sweep_checkpoint, summarize)
@@ -40,8 +39,6 @@ from tls_compat import enable_os_trust_store
 
 enable_os_trust_store()
 
-HERE = Path(__file__).resolve().parent
-DATA_DIR = Path(os.environ.get("AAL_DATA_DIR", HERE))
 AGENCY_WATCHLIST_FILE = DATA_DIR / "agency_watchlist.json"
 STATE_FILE = DATA_DIR / "prospect_signals_state.json"
 CSV_FILE = DATA_DIR / "prospect_signals.csv"

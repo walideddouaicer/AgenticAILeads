@@ -1,22 +1,24 @@
 # Implementation status
 
-Updated: 22 September 2026. Scope: Phase 0 baseline, setup and verification.
+Updated: 22 September 2026. Scope: Phase 0 baseline and Phase 1 persistence/process safety.
 
 ## Checkpoints
 
 - Pre-implementation commit: `0a7db20adabe6bdd435cc013dc16bdb2b1aa409b`.
 - Branch: `codex/minimum-complete`.
-- First implementation subject: `Establish isolated baseline and project guidance gbt 1.0`.
-- Next implementation commit suffix after this checkpoint: `gbt 2.0` (verify Git history).
-- No application workflow, matching rule, storage format or integration behavior
-  was changed in Phase 0. The Docker Python minor version now matches local setup;
-  the image itself has not been built or deployed.
+- `2741e4e` — `Establish isolated baseline and project guidance gbt 1.0`.
+- `7160da3` — `Add atomic storage and ownership-safe locks gbt 2.0`.
+- `648d649` — `Make app state updates conflict-safe gbt 3.0`.
+- `6289e47` — `Unify engine execution and process locking gbt 4.0`.
+- `5e213af` — `Make sweep output batches crash recoverable gbt 5.0`.
+- Next implementation commit suffix after the Phase 1 completion checkpoint:
+  `gbt 7.0` (verify Git history).
 
 | Phase | Status |
 |---|---|
 | 0 — baseline, environment, instructions | Complete at the first numbered checkpoint |
-| 1 — persistence and process execution | Next |
-| 2 — evidence and sample correctness | Not started |
+| 1 — persistence and process execution | Complete through `gbt 6.0` |
+| 2 — evidence and sample correctness | Next |
 | 3 — unified queue and durable actions | Not started |
 | 4 — interface consolidation | Not started |
 | 5 — minimum client delivery | Not started |
@@ -98,13 +100,38 @@ remove each marker and retain the regression; an unexpected success currently
 fails the known-gap suite to require that update.
 
 Additional reliability/data-quality issues in the implementation plan remain
-static-review findings until their phases reproduce and fix them. ResourceWarnings
-about unclosed CSV readers occur in the existing app and belong in Phase 1's file
-access cleanup. Passing the repaired baseline suite is not release readiness.
+static-review findings until their phases reproduce and fix them. The baseline
+ResourceWarnings from unclosed CSV readers were addressed in Phase 1. Passing the
+repaired baseline suite is not release readiness.
+
+## Phase 1 result
+
+- JSON writes use atomic replacement and schema-checked reads. Damaged business
+  data is preserved with an explicit error instead of being reset to empty.
+- Status, contact and watchlist changes reload the latest file under a short lock.
+  Different-record edits merge; stale same-record changes and stale undo conflict.
+- App buttons and scheduled chains use one atomic owner-token engine lock. A failed
+  spawn releases its own lock, live owners cannot be cleared by another session,
+  and dead/legacy locks recover automatically.
+- Signal and mandate sweeps checkpoint state, history and signals before applying
+  them. Restart tests interrupt after each write boundary and recover without a
+  duplicate signal or a changed observation date.
+- Discovery, prospect import, enrichment, mini-list and daily-queue writers now
+  use the shared safe storage operations. CSV appends are locked and idempotent;
+  manual prospect rows and non-empty contact corrections are preserved.
+- `runtime.py` is the single source for `AAL_DATA_DIR` and `AAL_ENV_FILE`.
+  Private probe output follows the data directory rather than the code checkout.
+- History backups are validated JSON. The restore command preserves the current
+  history as a pre-restore backup before atomically applying the selected copy.
+
+Phase 1 verification: offline guard, syntax, bare launcher, units, storage,
+runner, sweep recovery, engine storage, mocked delivery and page tests all pass.
+The two Phase 3 regressions remain expected failures: queue eligibility differs
+between builder and page, and today's initial-send budget does not decrease.
+No live network/provider request, message, deployment or scheduler change ran.
 
 ## Next phase
 
-Implement Phase 1: validated reads and atomic writes, safe record updates,
-shared process locking, consistent data/credential paths, recoverable engine
-commits, run outcomes, backups and restore tests. Preserve existing identifiers
-and data compatibility. Continue the commit sequence with `gbt 2.0`.
+Implement Phase 2: evidence freshness, confirmed board identities, one correct
+niche/location matcher, contact association and correction-safe enrichment, and
+sample/copy claims derived from the reviewed rows. Continue with `gbt 7.0`.
