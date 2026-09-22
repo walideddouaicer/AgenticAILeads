@@ -23,7 +23,6 @@ separate state, separate CSV; nothing here touches client configs.
 """
 
 import argparse
-import csv
 import json
 import os
 import sys
@@ -34,8 +33,9 @@ from pathlib import Path
 import requests
 
 from signal_engine import FETCHERS, REQUEST_DELAY_SECONDS
-from sweep_core import (enable_utf8_stdout, load_history,
-                        record_observations, save_history, summarize)
+from sweep_core import (commit_sweep_batch, enable_utf8_stdout, load_history,
+                        load_json_state, record_observations,
+                        recover_sweep_checkpoint, summarize)
 from tls_compat import enable_os_trust_store
 
 enable_os_trust_store()
@@ -48,8 +48,10 @@ CSV_FILE = DATA_DIR / "prospect_signals.csv"
 # Separate history file — the two pipelines never share state, and an
 # agency's mandate age is a different thing from a client's req age.
 HISTORY_FILE = DATA_DIR / "mandate_history.json"
+CHECKPOINT_FILE = DATA_DIR / "mandate_sweep.pending.json"
 
 FIELDNAMES = ["date", "agency", "mandate_title", "location", "url", "hook"]
+SIGNAL_KEY_FIELDS = ["date", "agency", "url"]
 
 
 def make_hook(title: str, location: str) -> str:
@@ -71,12 +73,7 @@ def load_agency_watchlist():
 
 
 def load_state():
-    if not STATE_FILE.exists():
-        return {}
-    try:
-        return json.loads(STATE_FILE.read_text())
-    except json.JSONDecodeError:
-        return {}
+    return load_json_state(STATE_FILE)
 
 
 def main():
@@ -87,6 +84,12 @@ def main():
     ap.add_argument("--baseline", action="store_true",
                     help="record state without alerting")
     args = ap.parse_args()
+
+    recovered = recover_sweep_checkpoint(
+        CHECKPOINT_FILE, STATE_FILE, HISTORY_FILE, CSV_FILE,
+        FIELDNAMES, SIGNAL_KEY_FIELDS)
+    if recovered:
+        print("Recovered the previous interrupted mandate sweep.")
 
     watchlist = load_agency_watchlist()
     state = load_state()
@@ -143,21 +146,16 @@ def main():
 
             state[key] = jobs
 
-    STATE_FILE.write_text(json.dumps(state))
-    save_history(HISTORY_FILE, history)
+    appended = commit_sweep_batch(
+        CHECKPOINT_FILE, STATE_FILE, HISTORY_FILE, CSV_FILE,
+        FIELDNAMES, SIGNAL_KEY_FIELDS, state, history, signals)
 
     s = summarize(history, today)
     print(f"\nMandate history: {s['jobs_tracked']} mandate(s), {s['live']} "
           f"live, {s['days_of_history']} day(s) of history.")
 
     if signals:
-        new_file = not CSV_FILE.exists()
-        with CSV_FILE.open("a", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=FIELDNAMES)
-            if new_file:
-                w.writeheader()
-            w.writerows(signals)
-        print(f"\n{len(signals)} prospect signal(s) appended to "
+        print(f"\n{appended} prospect signal(s) appended to "
               f"{CSV_FILE.name} — work them from the app's Prospects page.")
     elif not (first_run or args.baseline):
         print("\nNo new mandates today.")

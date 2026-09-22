@@ -19,7 +19,6 @@ How to find board tokens (Google these, token is in the result URLs):
 """
 
 import argparse
-import csv
 import json
 import os
 import sys
@@ -30,8 +29,9 @@ from pathlib import Path
 import requests
 
 import sweep_core
-from sweep_core import (enable_utf8_stdout, load_history,
-                        record_observations, save_history, summarize)
+from sweep_core import (commit_sweep_batch, enable_utf8_stdout, load_history,
+                        load_json_state, record_observations,
+                        recover_sweep_checkpoint, summarize)
 from tls_compat import enable_os_trust_store
 
 enable_os_trust_store()
@@ -95,6 +95,10 @@ CSV_FILE = DATA_DIR / "signals.csv"
 # Append-only job history — days_open / repost_count / rewritten live here.
 # Unlike STATE_FILE this is never rebuilt from scratch; see sweep_core.
 HISTORY_FILE = DATA_DIR / "job_history.json"
+CHECKPOINT_FILE = DATA_DIR / "signal_sweep.pending.json"
+FIELDNAMES = ["date", "client", "platform", "company", "title",
+              "location", "score", "url", "hook"]
+SIGNAL_KEY_FIELDS = ["date", "client", "platform", "company", "url"]
 
 # Greenhouse only returns `offices` (the real city) when content=true, at
 # the cost of shipping every job description too. Worth it: without it,
@@ -273,11 +277,12 @@ def make_hook(new_jobs: list) -> str:
 
 
 def load_state():
-    if not STATE_FILE.exists():
-        return {}
-    state = json.loads(STATE_FILE.read_text())
     # migrate Phase-1 keys ("gitlab") to Phase-2 keys ("greenhouse:gitlab")
-    return {(k if ":" in k else f"greenhouse:{k}"): v for k, v in state.items()}
+    return load_json_state(
+        STATE_FILE,
+        migrate=lambda state: {
+            (k if ":" in k else f"greenhouse:{k}"): v
+            for k, v in state.items()})
 
 
 def probe_board(spec: str):
@@ -320,6 +325,12 @@ def main():
 
     if args.probe:
         return probe_board(args.probe)
+
+    recovered = recover_sweep_checkpoint(
+        CHECKPOINT_FILE, STATE_FILE, HISTORY_FILE, CSV_FILE,
+        FIELDNAMES, SIGNAL_KEY_FIELDS)
+    if recovered:
+        print("Recovered the previous interrupted signal sweep.")
 
     state = load_state()
     history = load_history(HISTORY_FILE)
@@ -392,8 +403,9 @@ def main():
 
             state[key] = jobs
 
-    STATE_FILE.write_text(json.dumps(state))
-    save_history(HISTORY_FILE, history)
+    appended = commit_sweep_batch(
+        CHECKPOINT_FILE, STATE_FILE, HISTORY_FILE, CSV_FILE,
+        FIELDNAMES, SIGNAL_KEY_FIELDS, state, history, all_signals)
 
     s = summarize(history, today)
     print(f"\nHistory: {s['jobs_tracked']} job(s) across {s['boards']} board(s)"
@@ -405,13 +417,7 @@ def main():
           f"{hist_totals['rewritten']} rewritten")
 
     if all_signals:
-        new_file = not CSV_FILE.exists()
-        with CSV_FILE.open("a", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=list(all_signals[0].keys()))
-            if new_file:
-                w.writeheader()
-            w.writerows(all_signals)
-        print(f"\n{len(all_signals)} signal(s) appended to {CSV_FILE.name}")
+        print(f"\n{appended} signal(s) appended to {CSV_FILE.name}")
     elif not (first_run or args.baseline):
         print("\nNo new signals today.")
     else:

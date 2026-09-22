@@ -55,11 +55,13 @@ the sweep is meant to run unattended and retries are normal.
 """
 
 import hashlib
-import json
 import re
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
+
+from storage import (DataFileError, FileLock, append_csv_unique,
+                     atomic_write_json, read_json)
 
 
 # Values companies type into the "location" box that describe a WORKING
@@ -151,18 +153,12 @@ CLOSED_AFTER_DAYS = 2
 def load_json_state(path: Path, migrate=None) -> dict:
     """Read a sweep state file. `migrate` remaps keys on load (signal_engine
     uses it to upgrade Phase-1 keys like "gitlab" to "greenhouse:gitlab")."""
-    path = Path(path)
-    if not path.exists():
-        return {}
-    try:
-        state = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {}
+    state = read_json(path, default={}, expected_type=dict)
     return migrate(state) if migrate else state
 
 
 def save_json_state(path: Path, state: dict) -> None:
-    Path(path).write_text(json.dumps(state), encoding="utf-8")
+    atomic_write_json(path, state)
 
 
 # ---------------------------------------------------------------- history
@@ -191,22 +187,104 @@ def _title_only_hash(job: dict) -> str:
 
 
 def load_history(path: Path) -> dict:
-    path = Path(path)
-    if not path.exists():
-        return {}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+        return read_json(path, default={}, expected_type=dict)
+    except DataFileError as error:
         # Never silently start a fresh history — that would look like the
         # recorder is working while quietly resetting the moat to zero.
         raise SystemExit(
-            f"{path.name} is corrupt. Do NOT delete it — it cannot be "
+            f"{Path(path).name} is corrupt. Do NOT delete it — it cannot be "
             "rebuilt. Restore it from a backup, or move it aside "
-            "deliberately if you accept losing the history to date.")
+            "deliberately if you accept losing the history to date.") from error
 
 
 def save_history(path: Path, history: dict) -> None:
-    Path(path).write_text(json.dumps(history), encoding="utf-8")
+    atomic_write_json(path, history)
+
+
+# ---------------------------------------------------------- durable batches
+
+def _validate_checkpoint(checkpoint: dict, path: Path) -> None:
+    if (checkpoint.get("version") != 1
+            or not isinstance(checkpoint.get("state"), dict)
+            or not isinstance(checkpoint.get("history"), dict)
+            or not isinstance(checkpoint.get("signals"), list)):
+        raise DataFileError(
+            f"{path.name} is invalid; it was left unchanged for recovery")
+
+
+def _apply_checkpoint(checkpoint_path, state_path, history_path, csv_path,
+                      fieldnames, key_fields, checkpoint,
+                      interrupt_after=None):
+    checkpoint_path = Path(checkpoint_path)
+    _validate_checkpoint(checkpoint, checkpoint_path)
+
+    atomic_write_json(state_path, checkpoint["state"])
+    if interrupt_after == "state":
+        raise RuntimeError("simulated interruption after state")
+
+    atomic_write_json(history_path, checkpoint["history"])
+    if interrupt_after == "history":
+        raise RuntimeError("simulated interruption after history")
+
+    added = append_csv_unique(
+        csv_path, checkpoint["signals"], fieldnames,
+        key=lambda row: tuple(str(row.get(field, "")) for field in key_fields))
+    if interrupt_after == "csv":
+        raise RuntimeError("simulated interruption after csv")
+
+    checkpoint_path.unlink(missing_ok=True)
+    return added
+
+
+def recover_sweep_checkpoint(checkpoint_path, state_path, history_path,
+                             csv_path, fieldnames, key_fields,
+                             *, _interrupt_after=None) -> bool:
+    """Replay an interrupted sweep batch. Returns True when one existed."""
+    checkpoint_path = Path(checkpoint_path)
+    lock_path = checkpoint_path.with_name(checkpoint_path.name + ".lock")
+    with FileLock(lock_path, label=f"recovering {checkpoint_path.name}",
+                  timeout=5):
+        if not checkpoint_path.exists():
+            return False
+        checkpoint = read_json(checkpoint_path, expected_type=dict)
+        _apply_checkpoint(
+            checkpoint_path, state_path, history_path, csv_path,
+            fieldnames, key_fields, checkpoint, _interrupt_after)
+        return True
+
+
+def commit_sweep_batch(checkpoint_path, state_path, history_path, csv_path,
+                       fieldnames, key_fields, state, history, signals,
+                       *, _interrupt_after=None) -> int:
+    """Commit a sweep's three outputs through a replayable checkpoint.
+
+    JSON replacements are atomic and CSV insertion is idempotent. If the
+    process stops after any individual write, the next run replays the saved
+    batch before it fetches new data.
+    """
+    checkpoint_path = Path(checkpoint_path)
+    lock_path = checkpoint_path.with_name(checkpoint_path.name + ".lock")
+    with FileLock(lock_path, label=f"committing {checkpoint_path.name}",
+                  timeout=5):
+        if checkpoint_path.exists():
+            pending = read_json(checkpoint_path, expected_type=dict)
+            _apply_checkpoint(
+                checkpoint_path, state_path, history_path, csv_path,
+                fieldnames, key_fields, pending)
+
+        checkpoint = {
+            "version": 1,
+            "state": state,
+            "history": history,
+            "signals": list(signals),
+        }
+        atomic_write_json(checkpoint_path, checkpoint)
+        if _interrupt_after == "checkpoint":
+            raise RuntimeError("simulated interruption after checkpoint")
+        return _apply_checkpoint(
+            checkpoint_path, state_path, history_path, csv_path,
+            fieldnames, key_fields, checkpoint, _interrupt_after)
 
 
 def record_observations(history: dict, board_key: str, jobs: dict,

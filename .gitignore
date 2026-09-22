@@ -18,6 +18,8 @@ inbox_status.json
 enriched_contacts.json
 discovery_state.json
 .engine.lock
+*.pending.json
+*.pending.json.lock
 
 # Own-client prospecting runtime data
 prospects.csv
