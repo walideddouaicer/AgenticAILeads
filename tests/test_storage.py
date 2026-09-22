@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import storage
+import core
 
 
 def test_corrupt_json_is_preserved():
@@ -71,6 +72,54 @@ def test_record_updates_merge_and_stale_edit_conflicts():
             pass
         else:
             raise AssertionError("stale edit overwrote a newer record")
+
+
+def test_core_status_actions_merge_and_stale_undo_stops():
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "status.json"
+        storage.atomic_write_json(path, {
+            "a": {"status": "new", "on": "", "notes": ""},
+            "b": {"status": "new", "on": "", "notes": ""},
+        })
+        first = core.load_status(path)
+        second = core.load_status(path)
+        barrier = threading.Barrier(2)
+
+        def change(status, key):
+            barrier.wait()
+            core.apply_stage(status, key, "contacted", path=path)
+
+        threads = [threading.Thread(target=change, args=(first, "a")),
+                   threading.Thread(target=change, args=(second, "b"))]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        saved = core.load_status(path)
+        assert saved["a"]["status"] == saved["b"]["status"] == "contacted"
+
+        expected = core.status_revision(saved, "a")
+        core.update_status_fields(saved, "a", {"notes": "newer edit"}, path)
+        try:
+            core.restore_status_record(saved, "a", None, path,
+                                       expected=expected)
+        except storage.ConflictError:
+            pass
+        else:
+            raise AssertionError("stale undo removed another session's edit")
+        assert core.load_status(path)["a"]["notes"] == "newer edit"
+
+
+def test_core_does_not_treat_corrupt_status_as_empty():
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "status.json"
+        path.write_text("not json", encoding="utf-8")
+        try:
+            core.load_status(path)
+        except storage.DataFileError:
+            pass
+        else:
+            raise AssertionError("corrupt status was treated as empty")
 
 
 def test_lock_is_atomic_and_only_owner_releases():

@@ -128,10 +128,7 @@ for offset, (row, key, entry, eff, due) in enumerate(chunk):
                                       "the client page.")
             if st.button("Save notes", key=f"svnt_{wkey}",
                          help="Stores the notes without changing the stage."):
-                e = status.get(key, {"status": "new", "on": "", "notes": ""})
-                e["notes"] = notes
-                status[key] = e
-                C.save_status(status)
+                C.update_status_fields(status, key, {"notes": notes})
                 C.push_toast("Notes saved", "📝")
                 st.rerun()
 

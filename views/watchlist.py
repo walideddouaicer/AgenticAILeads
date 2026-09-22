@@ -62,9 +62,7 @@ if url_in.strip():
                          key="wl_add",
                          help="Adds the board; it will be baselined on the "
                               "next sweep."):
-                wl[platform].append(token)
-                wl[platform] = sorted(set(wl[platform]))
-                C.save_watchlist(wl)
+                C.update_watchlist(add=[(platform, token)])
                 C.push_toast(f"Added {token} ({platform})", "📡")
                 st.rerun()
     else:
@@ -94,11 +92,7 @@ with st.expander("Bulk import — paste anything containing board URLs "
                          key="wl_bulk_add",
                          help="Adds every detected board that isn't already "
                               "watched."):
-                for p, t in bulk_new:
-                    wl[p].append(t)
-                for p in wl:
-                    wl[p] = sorted(set(wl[p]))
-                C.save_watchlist(wl)
+                C.update_watchlist(add=bulk_new)
                 C.push_toast(f"Added {len(bulk_new)} board(s)", "📡")
                 st.rerun()
 
@@ -117,9 +111,8 @@ with st.expander("Add manually (platform + token)"):
         if st.button("Add", key="wl_madd",
                      help="Adds platform:token to the watchlist.") \
                 and m_token.strip():
-            wl[m_platform].append(m_token.strip().lower())
-            wl[m_platform] = sorted(set(wl[m_platform]))
-            C.save_watchlist(wl)
+            C.update_watchlist(
+                add=[(m_platform, m_token.strip().lower())])
             C.push_toast(f"Added {m_token.strip().lower()} ({m_platform})", "📡")
             st.rerun()
 
@@ -143,11 +136,9 @@ with sc2:
                             key="wl_bulk_rm_btn",
                             help="Removes them from the nightly sweep. "
                                  "Re-adding later re-baselines silently."):
-        for bid in rm_sel:
-            p, _, t = bid.partition(":")
-            if t in wl.get(p, []):
-                wl[p].remove(t)
-        C.save_watchlist(wl)
+        C.update_watchlist(
+            remove=[(bid.partition(":")[0], bid.partition(":")[2])
+                    for bid in rm_sel])
         C.push_toast(f"Removed {len(rm_sel)} board(s)", "🗑")
         st.rerun()
 
@@ -174,7 +165,6 @@ for platform in C.PLATFORMS:
                         else "not swept yet — appears after next run")
             if rc3.button("remove", key=f"wl_rm_{platform}_{i}",
                           help=f"Stop sweeping {token} ({platform})."):
-                wl[platform].remove(token)
-                C.save_watchlist(wl)
+                C.update_watchlist(remove=[(platform, token)])
                 C.push_toast(f"Removed {token} ({platform})", "🗑")
                 st.rerun()

@@ -326,10 +326,8 @@ def prospect_card(k, p, kind, i):
             if st.button("Save", key=f"nk_save_{k}",
                          help="Persists the override in "
                               "prospects_status.json."):
-                e = status.get(k, {"status": "new", "on": "", "notes": ""})
-                e["niche"] = niche_in
-                status[k] = e
-                C.save_status(status, C.PROSPECTS_STATUS)
+                C.update_status_fields(status, k, {"niche": niche_in},
+                                       C.PROSPECTS_STATUS)
                 C.push_toast(f"Niche saved for {agency}", "🏷")
                 st.rerun()
 

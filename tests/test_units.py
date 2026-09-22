@@ -6,6 +6,7 @@ Usage: python tests/test_units.py
 import json
 import os
 import sys
+import tempfile
 from datetime import date
 from pathlib import Path
 
@@ -291,16 +292,18 @@ def t_common_reexports_core():
 def t_stage_mutators_agree():
     """core.apply_stage and the UI wrapper must write the same thing."""
     import core
-    st_map = {}
-    core.apply_stage(st_map, "k1", "contacted", path=Path(os.devnull))
-    assert st_map["k1"]["status"] == "contacted"
-    assert st_map["k1"]["on"] == date.today().isoformat()
-    e = core.apply_followup(st_map, "k1", path=Path(os.devnull))
-    assert e["fu"] == 1
-    e = core.apply_followup(st_map, "k1", path=Path(os.devnull))
-    assert e["fu"] == 2
-    # after MAX_FOLLOWUPS the lead leaves the queue forever
-    assert core.followup_due(st_map["k1"]) is False
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "status.json"
+        st_map = {}
+        core.apply_stage(st_map, "k1", "contacted", path=path)
+        assert st_map["k1"]["status"] == "contacted"
+        assert st_map["k1"]["on"] == date.today().isoformat()
+        e = core.apply_followup(st_map, "k1", path=path)
+        assert e["fu"] == 1
+        e = core.apply_followup(st_map, "k1", path=path)
+        assert e["fu"] == 2
+        # after MAX_FOLLOWUPS the lead leaves the queue forever
+        assert core.followup_due(st_map["k1"]) is False
 
 
 # ------------------------------------------------- contact providers

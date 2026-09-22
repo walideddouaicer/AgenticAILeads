@@ -302,6 +302,7 @@ def _snapshot_undo(status: dict, key: str, label: str, path=None):
         "prev": dict(prev) if isinstance(prev, dict) else prev,
         "label": label,
         "path": str(path or INBOX_STATUS),
+        "expected": None,
     }
 
 
@@ -317,11 +318,14 @@ def undo_last():
         return None
     path = Path(u.get("path") or INBOX_STATUS)
     status = load_status(path)
-    if u["prev"] is None:
-        status.pop(u["key"], None)
-    else:
-        status[u["key"]] = u["prev"]
-    save_status(status, path)
+    try:
+        restore_status_record(status, u["key"], u["prev"], path,
+                              expected=u["expected"])
+    except ConflictError:
+        st.session_state["_undo"] = u
+        push_toast("Undo stopped: this record changed in another session. "
+                   "Reload before trying again.", "⚠️")
+        return None
     return u["label"]
 
 
@@ -398,23 +402,24 @@ def render_contact_editor(row, wkey):
                 if errs:
                     st.error(" ".join(errs))
                 else:
-                    cache = load_contacts_cache()
-                    entries = [c for c in (cache.get(company) or [])
-                               if isinstance(c, dict)]
                     new = {"name": name.strip(), "title": title.strip(),
                            "linkedin": linkedin.strip(),
                            "email": email.strip()}
-                    idx = next(
-                        (i for i, c in enumerate(entries)
-                         if (c.get("name", "").strip().lower()
-                             == existing_name.lower())),
-                        None) if editing else None
-                    if idx is None:
-                        entries.append(new)
-                    else:
-                        entries[idx] = new
-                    cache[company] = entries
-                    save_contacts_cache(cache)
+
+                    def save(entries):
+                        entries = [c for c in entries if isinstance(c, dict)]
+                        idx = next(
+                            (i for i, c in enumerate(entries)
+                             if (c.get("name", "").strip().lower()
+                                 == existing_name.lower())),
+                            None) if editing else None
+                        if idx is None:
+                            entries.append(new)
+                        else:
+                            entries[idx] = new
+                        return entries
+
+                    update_company_contacts(company, save)
                     push_toast(f"Contact saved for {company}", "👤")
                     st.rerun()
         with c2:
@@ -422,16 +427,12 @@ def render_contact_editor(row, wkey):
                     "🗑 Remove contact", key=f"mc_r_{wkey}", width="stretch",
                     help="Deletes this contact from enriched_contacts.json "
                          "(for every lead of this company)."):
-                cache = load_contacts_cache()
-                entries = [c for c in (cache.get(company) or [])
-                           if isinstance(c, dict)
-                           and c.get("name", "").strip().lower()
-                           != existing_name.lower()]
-                if entries:
-                    cache[company] = entries
-                else:
-                    cache.pop(company, None)
-                save_contacts_cache(cache)
+                update_company_contacts(
+                    company,
+                    lambda entries: [
+                        c for c in entries if isinstance(c, dict)
+                        and c.get("name", "").strip().lower()
+                        != existing_name.lower()])
                 push_toast(f"Contact removed from {company}", "🗑")
                 st.rerun()
 
@@ -445,6 +446,7 @@ def mark_followed_up(status, key, lead_label: str = "", path=None):
     _snapshot_undo(status, key, f"follow-up on {lead_label}" if lead_label
                    else "follow-up", path)
     e = apply_followup(status, key, path)
+    st.session_state["_undo"]["expected"] = status_revision(status, key)
     push_toast(f"Follow-up #{e['fu']} logged"
                + (f" — {lead_label}" if lead_label else ""), "🔁")
 
@@ -453,6 +455,7 @@ def set_stage(status, key, stage, notes=None, lead_label: str = "", path=None):
     """UI wrapper over core.apply_stage: adds the undo snapshot and toast."""
     _snapshot_undo(status, key, f"{lead_label or 'lead'} → {stage}", path)
     apply_stage(status, key, stage, notes, path)
+    st.session_state["_undo"]["expected"] = status_revision(status, key)
     icons = {"contacted": "✅", "replied": "💬", "won": "🏆", "dismissed": "🚫",
              "call_booked": "📅", "client_won": "🎉"}
     push_toast((f"{lead_label} → {stage.replace('_', ' ')}" if lead_label

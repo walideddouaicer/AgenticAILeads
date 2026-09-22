@@ -51,6 +51,8 @@ from urllib.parse import quote
 
 import delivery
 from filter_engine import DEFAULTS
+from storage import (DELETE, UNSET, atomic_write_json, read_json, revision,
+                     update_json, update_json_record)
 
 HERE = Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ.get("AAL_DATA_DIR", HERE))
@@ -156,10 +158,8 @@ def list_profiles():
 
 
 def load_profile(name):
-    try:
-        cfg = json.loads((CONFIG_DIR / f"{name}.json").read_text(encoding="utf-8"))
-    except Exception:
-        cfg = {}
+    cfg = read_json(CONFIG_DIR / f"{name}.json", default={},
+                    expected_type=dict)
     cfg.setdefault("client_id", name)
     cfg.setdefault("dm_template", DEFAULT_TEMPLATE)
     cfg.setdefault("email_subject", DEFAULT_EMAIL_SUBJECT)
@@ -201,12 +201,7 @@ def weights_to_text(w):
 # ============================ leads & status ============================
 
 def all_tracked_jobs():
-    if not STATE_FILE.exists():
-        return []
-    try:
-        state = json.loads(STATE_FILE.read_text())
-    except json.JSONDecodeError:
-        return []
+    state = read_json(STATE_FILE, default={}, expected_type=dict)
     jobs = []
     for board_key, board_jobs in state.items():
         platform, _, company = board_key.partition(":")
@@ -231,12 +226,9 @@ def load_leads():
     src = SIGNALS_CSV if SIGNALS_CSV.exists() else ENRICHED_CSV
     if not src.exists():
         return [], src.name
-    rows = list(csv.DictReader(src.open(encoding="utf-8")))
-    try:
-        cache = json.loads(CONTACTS_CACHE.read_text(encoding="utf-8")) \
-            if CONTACTS_CACHE.exists() else {}
-    except json.JSONDecodeError:
-        cache = {}
+    with src.open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
+    cache = read_json(CONTACTS_CACHE, default={}, expected_type=dict)
     for r in rows:
         if not r.get("client"):
             r["client"] = "default"
@@ -253,9 +245,7 @@ def load_status(path=None):
     earlier formats (plain string, legacy stage names, snooze fields).
     Default file is the lead inbox; pass PROSPECTS_STATUS for prospects."""
     path = path or INBOX_STATUS
-    if not path.exists():
-        return {}
-    raw = json.loads(path.read_text())
+    raw = read_json(path, default={}, expected_type=dict)
     out = {}
     for k, v in raw.items():
         if isinstance(v, str):
@@ -269,7 +259,59 @@ def load_status(path=None):
 
 
 def save_status(status, path=None):
-    (path or INBOX_STATUS).write_text(json.dumps(status, indent=1))
+    """Atomically replace a complete status map (legacy/bulk callers only)."""
+    atomic_write_json(path or INBOX_STATUS, status, indent=1)
+
+
+def status_revision(status, key):
+    return revision(status.get(key))
+
+
+def update_status_fields(status, key, fields, path=None, *, expected=UNSET):
+    """Merge fields into one latest status record under a file lock."""
+    path = Path(path or INBOX_STATUS)
+
+    def mutate(current):
+        entry = current if isinstance(current, dict) else {
+            "status": "new", "on": "", "notes": ""}
+        entry.update(fields)
+        return entry
+
+    latest, entry, saved_revision = update_json_record(
+        path, key, mutate, expected=expected)
+    status.clear()
+    status.update(latest)
+    return entry, saved_revision
+
+
+def restore_status_record(status, key, previous, path=None, *, expected):
+    path = Path(path or INBOX_STATUS)
+    value = DELETE if previous is None else previous
+    latest, entry, saved_revision = update_json_record(
+        path, key, lambda _current: value, expected=expected)
+    status.clear()
+    status.update(latest)
+    return entry, saved_revision
+
+
+def transition_status_if(status, key, allowed, fields, path=None):
+    """Atomically apply a transition only from one of the allowed stages."""
+    path = Path(path or INBOX_STATUS)
+    changed = {"value": False}
+
+    def mutate(current):
+        entry = current if isinstance(current, dict) else {
+            "status": "new", "on": "", "notes": ""}
+        if effective_status(entry) not in allowed:
+            return entry
+        entry.update(fields)
+        changed["value"] = True
+        return entry
+
+    latest, entry, _ = update_json_record(path, key, mutate)
+    status.clear()
+    status.update(latest)
+    return changed["value"], entry
 
 
 def effective_status(entry) -> str:
@@ -361,21 +403,18 @@ def apply_replies(adapter, campaign_id=None):
     if not email_set:
         return {"emails": 0, "matched": 0, "changed": []}
     leads, _ = load_leads()
-    status = load_status()
     changed = []
     for r in leads:
         em = (r.get("contact1_email") or "").strip().lower()
         if not em or em not in email_set:
             continue
         k = lead_key(r)
-        if effective_status(status.get(k)) in ("new", "contacted"):
-            e = status.get(k, {"status": "new", "on": "", "notes": ""})
-            e["status"] = "replied"
-            e["on"] = date.today().isoformat()
-            status[k] = e
+        status = load_status()
+        advanced, _ = transition_status_if(
+            status, k, {"new", "contacted"},
+            {"status": "replied", "on": date.today().isoformat()})
+        if advanced:
             changed.append(r)
-    if changed:
-        save_status(status)
     return {"emails": len(email_set), "matched": len(changed),
             "changed": changed}
 
@@ -385,16 +424,19 @@ def apply_replies(adapter, campaign_id=None):
 def load_contacts_cache():
     """enriched_contacts.json — same file/format enrichment_engine writes:
     {company: [{name, title, linkedin, email}]}."""
-    if CONTACTS_CACHE.exists():
-        try:
-            return json.loads(CONTACTS_CACHE.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            return {}
-    return {}
+    return read_json(CONTACTS_CACHE, default={}, expected_type=dict)
 
 
 def save_contacts_cache(cache):
-    CONTACTS_CACHE.write_text(json.dumps(cache, indent=2), encoding="utf-8")
+    atomic_write_json(CONTACTS_CACHE, cache, indent=2)
+
+
+def update_company_contacts(company, mutator):
+    """Update one company's contact list without replacing other companies."""
+    latest, contacts, _ = update_json_record(
+        CONTACTS_CACHE, company,
+        lambda current: mutator(current if isinstance(current, list) else []))
+    return latest, contacts
 
 
 # ======================= stage mutations (pure) =======================
@@ -404,25 +446,28 @@ def save_contacts_cache(cache):
 
 def apply_stage(status, key, stage, notes=None, path=None):
     """Set a stage and stamp today's date. Mutates `status`, writes the file."""
-    entry = status.get(key, {"status": "new", "on": "", "notes": ""})
-    entry["status"] = stage
-    entry["on"] = date.today().isoformat()
+    fields = {"status": stage, "on": date.today().isoformat()}
     if notes is not None:
-        entry["notes"] = notes
-    status[key] = entry
-    save_status(status, path)
-    return entry
+        fields["notes"] = notes
+    return update_status_fields(status, key, fields, path)[0]
 
 
 def apply_followup(status, key, path=None):
     """Reset the follow-up timer and count the touch. Returns the entry, so
     callers can read entry['fu'] for the message they just sent."""
-    e = status.get(key, {"status": "contacted", "on": "", "notes": ""})
-    e["on"] = date.today().isoformat()
-    e["fu"] = int(e.get("fu", 0) or 0) + 1
-    status[key] = e
-    save_status(status, path)
-    return e
+    path = Path(path or INBOX_STATUS)
+
+    def mutate(current):
+        entry = current if isinstance(current, dict) else {
+            "status": "contacted", "on": "", "notes": ""}
+        entry["on"] = date.today().isoformat()
+        entry["fu"] = int(entry.get("fu", 0) or 0) + 1
+        return entry
+
+    latest, entry, _ = update_json_record(path, key, mutate)
+    status.clear()
+    status.update(latest)
+    return entry
 
 
 # ==================== prospects (our own clients) ====================
@@ -433,14 +478,16 @@ def load_prospects():
     """Rows from prospects.csv (prospector_engine output + user edits)."""
     if not PROSPECTS_CSV.exists():
         return []
-    return list(csv.DictReader(PROSPECTS_CSV.open(encoding="utf-8")))
+    with PROSPECTS_CSV.open(newline="", encoding="utf-8") as stream:
+        return list(csv.DictReader(stream))
 
 
 def load_prospect_signals():
     """Rows from prospect_signals.csv (mandate sweep output), newest first."""
     if not PROSPECT_SIGNALS_CSV.exists():
         return []
-    rows = list(csv.DictReader(PROSPECT_SIGNALS_CSV.open(encoding="utf-8")))
+    with PROSPECT_SIGNALS_CSV.open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
     rows.sort(key=lambda r: r.get("date", ""), reverse=True)
     return rows
 
@@ -548,14 +595,7 @@ ICP_DEFAULTS = {
 
 def load_icp():
     """The current ICP, with every key guaranteed present."""
-    cfg = {}
-    if ICP_FILE.exists():
-        try:
-            cfg = json.loads(ICP_FILE.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            cfg = {}
-    if not isinstance(cfg, dict):
-        cfg = {}
+    cfg = read_json(ICP_FILE, default={}, expected_type=dict)
     for k, v in ICP_DEFAULTS.items():
         cfg.setdefault(k, list(v) if isinstance(v, list) else v)
     try:
@@ -570,7 +610,7 @@ def load_icp():
 
 
 def save_icp(cfg):
-    ICP_FILE.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    atomic_write_json(ICP_FILE, cfg, indent=2)
 
 
 def icp_size_range(cfg=None) -> str:
@@ -631,12 +671,7 @@ def derive_niche_keywords(titles, top_n=5):
 def load_prospects_config():
     """Prospect DM templates (first touch / follow-up / breakup) —
     editable on the Prospects page, stored in prospects_config.json."""
-    cfg = {}
-    if PROSPECTS_CONFIG.exists():
-        try:
-            cfg = json.loads(PROSPECTS_CONFIG.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            cfg = {}
+    cfg = read_json(PROSPECTS_CONFIG, default={}, expected_type=dict)
     cfg.setdefault("dm_template", DEFAULT_PROSPECT_DM)
     cfg.setdefault("followup_template", DEFAULT_PROSPECT_FOLLOWUP)
     cfg.setdefault("followup2_template", DEFAULT_PROSPECT_FOLLOWUP2)
@@ -644,7 +679,7 @@ def load_prospects_config():
 
 
 def save_prospects_config(cfg):
-    PROSPECTS_CONFIG.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    atomic_write_json(PROSPECTS_CONFIG, cfg, indent=2)
 
 
 def render_prospect_dm(template, prospect, hook):
@@ -694,28 +729,33 @@ def parse_board_url(url: str):
 
 
 def load_watchlist():
-    if WATCHLIST_FILE.exists():
-        try:
-            wl = json.loads(WATCHLIST_FILE.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            wl = {}
-    else:
-        wl = {}
+    wl = read_json(WATCHLIST_FILE, default={}, expected_type=dict)
     return {p: sorted(set(str(t).strip().lower() for t in wl.get(p, []) if str(t).strip()))
             for p in PLATFORMS}
 
 
 def save_watchlist(wl):
-    WATCHLIST_FILE.write_text(json.dumps(wl, indent=2), encoding="utf-8")
+    atomic_write_json(WATCHLIST_FILE, wl, indent=2)
+
+
+def update_watchlist(*, add=(), remove=()):
+    """Atomically add/remove (platform, token) pairs and return latest data."""
+    add, remove = set(add), set(remove)
+
+    def mutate(raw):
+        for platform in PLATFORMS:
+            values = {str(token).strip().lower()
+                      for token in raw.get(platform, []) if str(token).strip()}
+            values.update(token for p, token in add if p == platform and token)
+            values.difference_update(token for p, token in remove if p == platform)
+            raw[platform] = sorted(values)
+        return raw
+
+    return update_json(WATCHLIST_FILE, mutate, default={}, expected_type=dict,
+                       indent=2)
 
 
 def tracked_job_counts():
     """{platform:token -> live job count} from the engine's state file."""
-    if not STATE_FILE.exists():
-        return {}
-    try:
-        state = json.loads(STATE_FILE.read_text())
-    except json.JSONDecodeError:
-        return {}
+    state = read_json(STATE_FILE, default={}, expected_type=dict)
     return {k: len(v) for k, v in state.items()}
-

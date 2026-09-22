@@ -85,8 +85,7 @@ with tab_boards:
         elif token in wl.get(platform, []):
             st.warning(f"`{platform}:{token}` is already tracked.")
         else:
-            wl.setdefault(platform, []).append(token)
-            C.save_watchlist(wl)
+            C.update_watchlist(add=[(platform, token)])
             C.push_toast(f"Added {platform}:{token}", "📡")
             st.rerun()
 
@@ -158,11 +157,9 @@ with tab_boards:
             help="Removing a board stops future sweeps. Its recorded history "
                  "is kept — deleting boards never deletes history.")
         if drop and st.button("Remove selected", key="sig_drop_btn"):
-            for item in drop:
-                p, _, t = item.partition(":")
-                if t in wl.get(p, []):
-                    wl[p].remove(t)
-            C.save_watchlist(wl)
+            C.update_watchlist(
+                remove=[(item.partition(":")[0], item.partition(":")[2])
+                        for item in drop])
             C.push_toast(f"Removed {len(drop)} board(s)", "🗑")
             st.rerun()
 
