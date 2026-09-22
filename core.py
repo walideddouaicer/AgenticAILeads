@@ -49,7 +49,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 import delivery
-from filter_engine import DEFAULTS
+from filter_engine import DEFAULTS, keyword_matches
 from storage import (DELETE, UNSET, atomic_write_json, read_json, revision,
                      update_json, update_json_record)
 from runtime import DATA_DIR, ENV_FILE, HERE
@@ -543,9 +543,6 @@ _NICHE_STOPWORDS = {
 # both directions, so country names, city names and ", XX" state suffixes
 # all work.
 #
-# "remote" is ALWAYS included: a UK agency can absolutely place a candidate
-# at a remote-first company, and excluding those would throw away the
-# single most common location string on the board.
 _MARKETS = {
     "uk": ["united kingdom", "england", "scotland", "wales", "britain",
            "london", "manchester", "leeds", "birmingham", "bristol",
@@ -641,13 +638,22 @@ def market_tokens(location: str) -> list:
     gift ignores geography entirely, which is the fastest way to prove you
     didn't look at who you're writing to.
 
-    Unknown or blank locations return [] — which filter_engine reads as
-    "anywhere", i.e. the old behaviour. Better a broad list than none.
+    Remote is returned only when the prospect explicitly says remote. Unknown
+    or ambiguous locations return an empty list so a sample requires review
+    instead of silently matching every market.
     """
     loc = (location or "").lower()
+    if keyword_matches(loc, "remote"):
+        return ["remote"]
+    aliases = {
+        "uk": ["uk", "u.k.", "united kingdom", "great britain"],
+        "us": ["us", "u.s.", "usa", "united states"],
+        "fr": ["fr", "france"],
+    }
     for market, tokens in _MARKETS.items():
-        if any(t in loc for t in tokens):
-            return tokens + ["remote"]
+        if any(keyword_matches(loc, term)
+               for term in aliases.get(market, []) + tokens):
+            return tokens
     return []
 
 
@@ -657,8 +663,17 @@ def derive_niche_keywords(titles, top_n=5):
     from collections import Counter
     c = Counter()
     for t in titles:
-        for w in re.findall(r"[a-z0-9.+#]+", str(t or "").lower()):
-            w = w.strip(".")
+        text = str(t or "").lower()
+        for phrase in ("data engineering", "machine learning",
+                       "artificial intelligence", "quality assurance",
+                       "cyber security", "cloud security"):
+            if keyword_matches(text, phrase):
+                c[phrase] += 1
+                text = re.sub(re.escape(phrase), " ", text)
+        for w in re.findall(r"\.net|c\+\+|c#|[a-z0-9]+(?:[.-][a-z0-9]+)*",
+                            text):
+            if w != ".net":
+                w = w.strip(".")
             if not w or w.isdigit() or len(w) < 2 or w in _NICHE_STOPWORDS:
                 continue
             c[w] += 1

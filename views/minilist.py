@@ -51,7 +51,7 @@ if not ml_kws:
     st.info("Enter at least one niche keyword above to build the list.")
     st.stop()
 
-ml_rows = build_minilist(ml_kws, C.parse_csv_line(ml_locations),
+ml_rows = build_minilist(ml_kws, C.parse_csv_line(ml_locations) or None,
                          n=int(ml_n),
                          state_file=C.STATE_FILE,
                          contacts_file=C.CONTACTS_CACHE)

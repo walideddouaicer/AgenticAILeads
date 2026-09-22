@@ -40,19 +40,9 @@ OUT_DIR = DATA_DIR / "minilists"
 DEFAULT_N = 10
 DEFAULT_EXCLUSIONS = ["intern", "internship", "unpaid", "apprentice"]
 
-# Mid-market bias. A boutique 2-20 person agency cannot place at SpaceX, so
-# handing them a list of megacap boards signals we don't understand their
-# business. Two levers, both measured against the live watchlist:
-#   MAX_BOARD_ROLES — drop companies with more than this many open roles on
-#     their board (a decent free proxy for headcount). 8 of 171 tracked
-#     boards hold 57% of all live jobs; at 60 the lists come back
-#     mid-market with ~97% of prospects still getting a list. Lower (25)
-#     starves a third of prospects; higher (150) lets the giants back in.
-#   HIT_CAP — the old ranking used raw len(hits), so a 2,166-role board won
-#     every niche by brute force. Capping it means "hiring a lot in this
-#     niche" stops being a synonym for "is enormous".
-# Set MAX_BOARD_ROLES = 0 (or --max-board-size 0) to disable the ceiling.
-MAX_BOARD_ROLES = 60
+# Open-role count is not employee count, so it cannot justify a hidden company
+# size gate. Keep the optional CLI override for a deliberate operator choice.
+MAX_BOARD_ROLES = 0
 HIT_CAP = 5
 DEFAULT_PITCH = ("Want 50 more of these per week — with the meetings already "
                  "booked for you? Pay per showed meeting, first one free. "
@@ -101,12 +91,18 @@ def build_minilist(keywords, locations=None, exclusions=None, n=DEFAULT_N,
         "inclusion_keywords": [k for k in (keywords or []) if str(k).strip()],
         "exclusion_keywords": (exclusions if exclusions is not None
                                else DEFAULT_EXCLUSIONS),
-        "allowed_locations": locations or [],
+        "allowed_locations": list(locations) if locations is not None else [],
         "keyword_weights": {},
         "min_score": 0,
     }
     contacts = _load_json(contacts_file, {})
     sizes = board_sizes(state_file) if ceiling else {}
+
+    # An explicitly supplied but unresolved market is a review requirement,
+    # not permission to draw companies from anywhere. None means the caller
+    # deliberately requested an unrestricted list.
+    if locations is not None and not locations:
+        return []
 
     by_company = {}
     for job in tracked_jobs(state_file):
@@ -282,8 +278,7 @@ def main():
     ap.add_argument("--max-board-size", type=int, default=MAX_BOARD_ROLES,
                     dest="max_board_size",
                     help=f"skip companies with more than this many open "
-                         f"roles (default {MAX_BOARD_ROLES}; 0 = no ceiling, "
-                         "which lets megacaps like SpaceX back in)")
+                         "roles (default 0 = no inferred size gate)")
     ap.add_argument("--pitch", default=DEFAULT_PITCH)
     args = ap.parse_args()
 
@@ -291,7 +286,7 @@ def main():
         return [x.strip() for x in s.split(",") if x.strip()]
 
     rows = build_minilist(
-        split(args.keywords), split(args.locations),
+        split(args.keywords), split(args.locations) or None,
         split(args.exclude) if args.exclude is not None else None, args.n,
         max_board_roles=args.max_board_size)
     if not rows:
