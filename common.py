@@ -25,8 +25,6 @@ deploy); default is the repo root.
 import csv
 import json
 import os
-import subprocess
-import sys
 import threading
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -34,6 +32,8 @@ from pathlib import Path
 import streamlit as st
 
 import delivery
+import runner as engine_runner
+from storage import LockBusy, lock_info
 
 from core import (AGENCY_WATCHLIST_FILE, ATS_URL_PATTERNS, CHANNELS,
     CHANNEL_COLORS, CONFIG_DIR, CONTACTS_CACHE, DAILY_QUEUE_CAP,
@@ -468,7 +468,7 @@ def set_stage(status, key, stage, notes=None, lead_label: str = "", path=None):
 # streaming their stdout into the page. A lockfile plus the session job
 # object guarantee that two engines never run concurrently.
 
-ENGINE_LOCK = DATA_DIR / ".engine.lock"
+ENGINE_LOCK = engine_runner.ENGINE_LOCK
 
 ENGINES = {
     "sweep": {
@@ -516,19 +516,21 @@ def engine_running() -> bool:
     return bool(job and not job.done)
 
 
-def _engine_reader(job: EngineJob, proc: subprocess.Popen):
+def _engine_reader(job: EngineJob, running: engine_runner.RunningProcess):
     """Background thread: drain stdout into the job, then release the lock.
     Touches no st.* API — only plain Python objects."""
     try:
-        for line in proc.stdout:
+        for line in running.process.stdout:
             job.lines.append(line.rstrip("\n"))
     finally:
-        job.rc = proc.wait()
+        job.rc = running.process.wait()
         job.done = True
-        try:
-            ENGINE_LOCK.unlink()
-        except OSError:
-            pass
+        running.finish(job.rc)
+
+
+def engine_busy() -> bool:
+    """True when a live engine process owns the shared runner lock."""
+    return engine_runner.engine_busy()
 
 
 def start_engine(name: str, extra_args=None) -> bool:
@@ -536,28 +538,19 @@ def start_engine(name: str, extra_args=None) -> bool:
     if engine_running():
         push_toast("An engine is already running — wait for it to finish.", "⏳")
         return False
-    if ENGINE_LOCK.exists():
-        push_toast("Engine lock present (another session running?) — see the "
-                   "engine panel to clear it if stale.", "🔒")
-        return False
     spec = ENGINES[name]
-    cmd = [sys.executable, "-u", str(HERE / spec["script"])] + [
-        str(a) for a in (extra_args or [])]
-    env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
+    cmd = engine_runner.command_for(name, extra_args)
     try:
-        proc = subprocess.Popen(
-            cmd, cwd=str(HERE), stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT, text=True, encoding="utf-8",
-            errors="replace", env=env)
+        running = engine_runner.start_locked_process(cmd, label=spec["label"])
+    except LockBusy as error:
+        push_toast(str(error), "🔒")
+        return False
     except OSError as e:
         push_toast(f"Could not start {spec['script']}: {e}", "❌")
         return False
-    ENGINE_LOCK.write_text(
-        f"{proc.pid} {spec['script']} {datetime.now().isoformat()}",
-        encoding="utf-8")
     job = EngineJob(spec["label"], cmd)
     st.session_state["_engine_job"] = job
-    threading.Thread(target=_engine_reader, args=(job, proc),
+    threading.Thread(target=_engine_reader, args=(job, running),
                      daemon=True).start()
     push_toast(f"Started: {spec['label']}", spec["icon"])
     return True
@@ -569,15 +562,14 @@ def render_engine_panel():
     job = st.session_state.get("_engine_job")
 
     if job is None:
-        if ENGINE_LOCK.exists():
-            st.warning("An engine lockfile exists but no engine is running in "
-                       "this session. Either another window is running one, "
-                       "or a previous run crashed.")
-            if st.button("Clear stale engine lock", key="clear_lock",
-                         help="Only click this if you're sure no engine is "
-                              "running in another window."):
-                ENGINE_LOCK.unlink(missing_ok=True)
-                st.rerun()
+        info = lock_info(ENGINE_LOCK)
+        if info and info.get("active"):
+            label = info.get("label", "engine")
+            pid = info.get("pid", "unknown")
+            st.info(f"{label} is running in another session (process {pid}).")
+        elif info:
+            st.caption("A previous engine process ended unexpectedly. The "
+                       "next run will recover its lock automatically.")
         return
 
     if not job.done:
@@ -615,7 +607,7 @@ def engine_button(name: str, key: str, extra_args=None, label=None,
                   help_text=None, type="secondary"):
     """One 'run engine X' button with the shared lock/disable behavior."""
     spec = ENGINES[name]
-    disabled = engine_running() or ENGINE_LOCK.exists()
+    disabled = engine_running() or engine_busy()
     if st.button(label or f"{spec['icon']} Run {spec['label']}", key=key,
                  disabled=disabled, type=type, width="stretch",
                  help=help_text or f"Runs `python {spec['script']}` in the "

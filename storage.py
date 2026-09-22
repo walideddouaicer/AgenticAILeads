@@ -60,10 +60,15 @@ def _pid_alive(pid: int) -> bool:
 def _read_lock(path: Path) -> tuple[dict, str]:
     try:
         raw = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return {}, ""
+    try:
         data = json.loads(raw)
         return (data if isinstance(data, dict) else {}), raw
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        return {}, ""
+    except json.JSONDecodeError:
+        # Preserve non-JSON legacy lock contents so acquisition can compare
+        # and retire them safely instead of leaving a permanent dead lock.
+        return {}, raw
 
 
 class FileLock:

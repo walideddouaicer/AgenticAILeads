@@ -125,7 +125,7 @@ with tab_boards:
         # Always rendered, just disabled — a button that appears out of
         # nowhere once you type is a button people don't find.
         names_file = C.DATA_DIR / "_bulk_names.txt"
-        busy = C.engine_running() or C.ENGINE_LOCK.exists()
+        busy = C.engine_running() or C.engine_busy()
         if st.button("🌱 Find their boards & add", key="sig_bulk_run",
                      type="primary", width="stretch",
                      disabled=busy or not parsed,

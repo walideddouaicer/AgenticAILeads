@@ -66,6 +66,7 @@ def main():
                     ("bare-app", ["app.py"]),
                     ("units", ["tests/test_units.py"]),
                     ("storage", ["tests/test_storage.py"]),
+                    ("runner", ["tests/test_runner.py"]),
                     ("delivery", ["tests/test_delivery.py"]),
                     ("pages", ["tests/test_pages.py"]),
                     ("workflow-gaps", ["tests/test_workflow_gaps.py"])]

@@ -151,6 +151,15 @@ def test_dead_lock_is_recovered_without_manual_deletion():
         assert not path.exists()
 
 
+def test_legacy_text_lock_is_recovered():
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "engine.lock"
+        path.write_text("123 old scheduled lock", encoding="utf-8")
+        with storage.FileLock(path, label="new") as lock:
+            assert storage.lock_info(path)["token"] == lock.token
+        assert not path.exists()
+
+
 def main():
     tests = [value for name, value in sorted(globals().items())
              if name.startswith("test_") and callable(value)]
