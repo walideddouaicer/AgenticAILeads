@@ -280,8 +280,11 @@ def t_core_is_streamlit_free():
 def t_common_reexports_core():
     """Pages call C.lead_key(...) etc. — the re-export must stay complete."""
     import core, common
+    from types import ModuleType
     missing = [n for n in dir(core)
-               if not n.startswith("_") and not hasattr(common, n)]
+               if not n.startswith("_")
+               and not isinstance(getattr(core, n), ModuleType)
+               and not hasattr(common, n)]
     assert not missing, f"common.py stopped re-exporting: {missing}"
 
 

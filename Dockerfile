@@ -4,7 +4,7 @@
 # points at /data, which Coolify mounts as a PERSISTENT VOLUME so data
 # survives redeploys. The entrypoint seeds /data from the repo's committed
 # defaults (watchlist.json, configs/) on first boot.
-FROM python:3.12-slim
+FROM python:3.13-slim
 
 # Faster, cleaner Python in containers.
 ENV PYTHONUNBUFFERED=1 \

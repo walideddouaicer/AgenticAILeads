@@ -41,6 +41,7 @@ if "--single" not in sys.argv:
                             (TESTS / "fixture_data", ["--interact"])]:
         print(f"\n=== pages against {data_dir.name} ===")
         env = dict(os.environ, AAL_DATA_DIR=str(data_dir),
+                   AAL_SHOW_CLIENT_PAGES="1",
                    AAL_DISABLE_AUTH="1")  # bypass login gate for page tests
         r = subprocess.run([sys.executable, __file__, "--single"] + extra,
                            env=env)
@@ -68,7 +69,12 @@ def check(name, cond, detail=""):
 
 
 def fresh(page):
-    at = AppTest.from_file("app.py", default_timeout=30)
+    # Legacy pages are no longer registered by app.py. Exercise their
+    # remaining code directly until Phase 6 removes them.
+    if page in ("views/watchlist.py", "views/livejobs.py"):
+        return AppTest.from_file(ROOT / page, default_timeout=30).run()
+    at = AppTest.from_file(ROOT / "app.py", default_timeout=30).run()
+    assert not at.exception, [e.value for e in at.exception]
     at.switch_page(page)
     at.run()
     return at
@@ -258,27 +264,31 @@ if INTERACT:
     # gated. This guards the gate itself: a typo in the env var name would
     # otherwise either hide them forever or never hide them at all.
     print("  -- navigation gate --")
-    import importlib
-
-    def nav_titles(show):
+    def client_page_available(show):
         prev = os.environ.get("AAL_SHOW_CLIENT_PAGES")
         if show:
             os.environ["AAL_SHOW_CLIENT_PAGES"] = "1"
         else:
             os.environ.pop("AAL_SHOW_CLIENT_PAGES", None)
         try:
-            import app as app_mod
-            importlib.reload(app_mod)
-            return app_mod.SHOW_CLIENT_PAGES
+            at = AppTest.from_file(ROOT / "app.py", default_timeout=30).run()
+            assert not at.exception, [e.value for e in at.exception]
+            try:
+                at.switch_page("views/queue.py")
+            except ValueError:
+                return False
+            at.run()
+            assert not at.exception, [e.value for e in at.exception]
+            return True
         finally:
             if prev is None:
                 os.environ.pop("AAL_SHOW_CLIENT_PAGES", None)
             else:
                 os.environ["AAL_SHOW_CLIENT_PAGES"] = prev
 
-    check("client pages hidden by default", nav_titles(False) is False)
+    check("client pages hidden by default", client_page_available(False) is False)
     check("client pages restored by AAL_SHOW_CLIENT_PAGES=1",
-          nav_titles(True) is True)
+          client_page_available(True) is True)
 
 print()
 if fails:

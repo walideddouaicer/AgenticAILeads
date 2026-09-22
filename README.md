@@ -1,5 +1,36 @@
 # Agentic AI Leads
 
+## Cleanup in progress
+
+The current work follows [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
+See [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) for completed phases,
+baseline failures and release blockers. The sections below describe the existing
+app; they are not a claim that the final cleanup is complete.
+
+Linux development baseline: **Python 3.13.15** (see `.python-version`).
+`requirements.txt` pins the tested direct and transitive dependencies. To set up:
+
+```sh
+python3.13 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python scripts/check.py
+```
+
+Use the isolated check runner above instead of invoking fixture tests directly.
+It runs offline in a temporary source/data copy. Expected workflow failures are
+reported separately and remain release blockers. To retain detailed logs, add
+`--logs-dir /tmp/aal-check-logs`.
+
+To launch the current app locally, set `APP_USERNAME` and `APP_PASSWORD` in your
+shell without saving them to Git, then run:
+
+```sh
+.venv/bin/python -m streamlit run app.py --server.address 127.0.0.1
+```
+
+The container uses the same Python minor version; its deployment/recovery review
+is deferred to Phase 7. No recurring sweep is installed by these instructions.
+
 Lead-generation pipeline that watches companies' public job boards for hiring
 signals, scores and filters them per client, enriches promising companies with
 decision-maker contacts, and manages outreach in a local CRM.
