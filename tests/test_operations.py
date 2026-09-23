@@ -202,6 +202,29 @@ def test_linux_server_starts_on_loopback_with_persistent_data():
             == "contacted"
 
 
+def test_damaged_business_file_shows_recovery_not_traceback():
+    script = (
+        "from streamlit.testing.v1 import AppTest\n"
+        "import sys\n"
+        "at = AppTest.from_file(sys.argv[1], default_timeout=30).run()\n"
+        "for page in ('views/prospects.py', 'views/settings.py'):\n"
+        "    at.switch_page(page); at.run()\n"
+        "    assert not at.exception, [e.value for e in at.exception]\n"
+        "    assert any('damaged' in str(e.value) for e in at.error) or \\\n"
+        "        page.endswith('settings.py'), page\n"
+        "    assert any('Back up and recover' in str(i.value) for i in at.info)"
+        " or page.endswith('settings.py'), page\n")
+    with tempfile.TemporaryDirectory() as folder:
+        data = Path(folder)
+        status = data / "prospects_status.json"
+        status.write_text('{"broken": ', encoding="utf-8")
+        env = dict(os.environ, AAL_DATA_DIR=str(data), AAL_DISABLE_AUTH="1")
+        run = subprocess.run([sys.executable, "-c", script, str(ROOT / "app.py")],
+                             cwd=ROOT, env=env, capture_output=True, text=True)
+        assert run.returncode == 0, run.stdout + run.stderr
+        assert status.read_text(encoding="utf-8") == '{"broken": '
+
+
 if __name__ == "__main__":
     tests = [value for name, value in sorted(globals().items())
              if name.startswith("test_") and callable(value)]

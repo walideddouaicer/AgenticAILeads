@@ -9,6 +9,13 @@ from streamlit import runtime
 import auth
 import common as C
 import core
+from storage import DataFileError
+
+RECOVERY_STEPS = (
+    "Nothing was overwritten. Stop the app, then follow “Back up and "
+    "recover” in the README: restore your latest operational backup into a "
+    "new folder, check it, and start the app with `AAL_DATA_DIR` set to that "
+    "folder. Keep the damaged file for inspection.")
 
 
 def main():
@@ -26,9 +33,18 @@ def main():
         st.Page("views/settings.py", title="Settings", icon="⚙️"),
     ]
     nav = st.navigation(pages)
-    C.render_sidebar_stats()
+    try:
+        C.render_sidebar_stats()
+    except DataFileError:
+        st.sidebar.warning("Counts unavailable: a data file is damaged.")
     auth.logout_button()
-    nav.run()
+    try:
+        nav.run()
+    except DataFileError as error:
+        # A damaged business file must stop work with a recovery step,
+        # never a traceback or a silently empty screen.
+        st.error(str(error))
+        st.info(RECOVERY_STEPS)
 
 
 if runtime.exists():
