@@ -30,10 +30,6 @@ def main():
         (data / "board_refresh.json").write_text(json.dumps({
             "greenhouse:example": {"status": "success",
                                    "last_success": stamp}}), encoding="utf-8")
-        (data / "enriched_contacts.json").write_text(json.dumps({
-            "greenhouse:example": [{"name": "Jane Doe", "title": "Hiring Lead",
-                                    "linkedin": "https://linkedin.com/in/janedoe",
-                                    "email": ""}]}), encoding="utf-8")
         (data / "prospects_status.json").write_text(
             '{"agency-key": {"status": "contacted"}}', encoding="utf-8")
 
@@ -83,7 +79,18 @@ def main():
         assert not at.exception, [error.value for error in at.exception]
         draft = [widget for widget in at.text_area
                  if widget.label == "Final message"]
-        assert draft, "lead should have an editable final message"
+        assert draft and draft[0].value.startswith("Hi there"), (
+            draft[0].value if draft else "missing")
+        # Adding the contact must refresh an unsaved generated greeting.
+        (data / "enriched_contacts.json").write_text(json.dumps({
+            "greenhouse:example": [{"name": "Jane Doe", "title": "Hiring Lead",
+                                    "linkedin": "https://linkedin.com/in/janedoe",
+                                    "email": ""}]}), encoding="utf-8")
+        at.run()
+        draft = [widget for widget in at.text_area
+                 if widget.label == "Final message"]
+        assert draft and draft[0].value.startswith("Hi Jane — saw"), (
+            draft[0].value if draft else "missing")
         draft[0].set_value("Hi Jane - reviewed your Java opening. Let's talk.")
         at.run()
         [button for button in at.button

@@ -304,12 +304,31 @@ def display_hook(row):
     return f"previously saw a {row.get('title', '')} posting on your board"
 
 
+TEMPLATE_CORRECTION = ("Template needs correction: check its placeholders "
+                       "before sending this message.")
+
+
+def _sentence_hook(template, hook):
+    """Capitalise the hook only where the template starts a sentence with it.
+
+    Hooks read mid-sentence ("saw your board ..."), but follow-up templates
+    also place them after a full stop.
+    """
+    template = re.sub(r"(^|[.!?]\s+)\{hook\}", r"\1{hook_sentence}",
+                      str(template))
+    hook = str(hook or "")
+    return template, hook[:1].upper() + hook[1:]
+
+
 def render_dm(template, row):
     contact = row.get("contact1_name", "")
     first = contact.split()[0] if contact else "there"
+    hook = display_hook(row)
+    template, hook_sentence = _sentence_hook(template, hook)
     fields = {
         "first_name": first,
-        "hook": display_hook(row),
+        "hook": hook,
+        "hook_sentence": hook_sentence,
         "company": row.get("company", ""),
         "title": row.get("title", ""),
         "location": row.get("location", ""),
@@ -318,7 +337,8 @@ def render_dm(template, row):
     try:
         return template.format(**fields)
     except (KeyError, IndexError, ValueError):
-        return template
+        # Never hand back raw {placeholders} as a sendable message.
+        return TEMPLATE_CORRECTION
 
 
 def mailto_link(email, subject, body):
@@ -746,7 +766,10 @@ def derive_niche_keywords(titles, top_n=5):
     c = Counter()
     for t in titles:
         text = str(t or "").lower()
-        for phrase in ("data engineering", "machine learning",
+        # A lone "data" would match analysts, data entry and data
+        # protection roles alike, so keep the common data specialisms whole.
+        for phrase in ("data engineering", "data engineer", "data scientist",
+                       "data analyst", "machine learning",
                        "artificial intelligence", "quality assurance",
                        "cyber security", "cloud security"):
             if keyword_matches(text, phrase):
@@ -779,10 +802,12 @@ def save_prospects_config(cfg):
 def render_prospect_dm(template, prospect, hook, sample_rows=None):
     contact = prospect.get("person_name", "")
     first = contact.split()[0] if contact else "there"
+    template, hook_sentence = _sentence_hook(template, hook)
     fields = {
         "first_name": first,
         "agency": prospect.get("agency", ""),
         "hook": hook,
+        "hook_sentence": hook_sentence,
         "person_title": prospect.get("person_title", ""),
         "location": prospect.get("location", ""),
     }
@@ -803,8 +828,7 @@ def render_prospect_dm(template, prospect, hook, sample_rows=None):
     try:
         return template.format(**fields)
     except (KeyError, IndexError, ValueError):
-        return ("Template needs correction: check its placeholders before "
-                "sending this message.")
+        return TEMPLATE_CORRECTION
 
 
 # ============================ watchlist ============================

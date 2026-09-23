@@ -86,6 +86,27 @@ class OutreachChecks(unittest.TestCase):
         self.assertTrue(context["draft_sample_changed"])
         self.assertIn("2 reviewed roles", context["draft"])
 
+    def test_message_rendering_is_sendable_or_explicitly_blocked(self):
+        # A follow-up that starts a sentence with the hook is capitalised,
+        # while the same hook after a dash stays mid-sentence.
+        followup = core.render_prospect_dm(
+            core.DEFAULT_PROSPECT_FOLLOWUP, prospect(), "saw your java focus")
+        self.assertIn("floating this back up. Saw your java focus", followup)
+        first = core.render_prospect_dm(core.DEFAULT_PROSPECT_DM, prospect(),
+                                        "saw your java focus")
+        self.assertTrue(first.startswith("Hi Alex — saw your java focus"))
+        # Client templates with an unknown field never return raw placeholders.
+        with patch.object(core, "display_hook", lambda row: "saw a role"):
+            broken = core.render_dm("Hi {first_name} at {agency}", {})
+            self.assertEqual(broken, core.TEMPLATE_CORRECTION)
+            self.assertEqual(core.render_dm("{hook}.", {}), "Saw a role.")
+        status = {}
+        with self.assertRaises(ValueError):
+            outreach.record_send(status, "key", message=core.TEMPLATE_CORRECTION,
+                                 sample=[], channel="linkedin",
+                                 expected=revision(None))
+        self.assertFalse(core.PROSPECTS_STATUS.exists())
+
     def test_send_snapshot_budget_duplicate_and_notes(self):
         now = datetime(2026, 9, 23, 10, tzinfo=timezone.utc)
         status = {}

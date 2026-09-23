@@ -104,6 +104,9 @@ def test_niche_derivation_preserves_technical_phrases():
     assert "c++" in terms
     assert "data engineering" in terms
     assert "javascript" in terms
+    # A single Data Engineer posting must not widen into every "data" role.
+    assert core.derive_niche_keywords(["Senior Data Engineer"]) == ["data engineer"]
+    assert not keyword_matches("Data Entry Clerk", "data engineer")
 
 
 def main():

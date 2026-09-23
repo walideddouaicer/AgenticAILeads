@@ -205,8 +205,16 @@ if view == "Outreach":
                             config.get("followup_template", core.DEFAULT_FOLLOWUP_TEMPLATE))
                 draft = (entry.get("drafts") or {}).get(kind) or core.render_dm(
                     template, row)
+                # Key on the proposed text so adding a contact or saving a
+                # draft replaces a stale greeting instead of keeping it.
                 message = st.text_area("Final message", draft, height=140,
-                                       key=f"client_message_{key}_{kind}")
+                                       key=f"client_message_{key}_{kind}_"
+                                           f"{revision(draft)[:8]}")
+                template_invalid = message.startswith(
+                    core.TEMPLATE_CORRECTION[:26])
+                if template_invalid:
+                    st.error("Correct this client's message template in "
+                             "Profile & matches before recording a send.")
                 if st.button("Save draft", key=f"client_save_draft_{key}"):
                     drafts = dict(entry.get("drafts") or {})
                     drafts[kind] = message
@@ -231,7 +239,7 @@ if view == "Outreach":
                 st.code(message, language=None)
                 if st.button("Record manual send", type="primary",
                              disabled=not (contact_name and address_ok and
-                                           message.strip()),
+                                           message.strip()) or template_invalid,
                              help="Click only after sending the final message "
                                   "outside this app.",
                              key=f"client_record_send_{key}"):

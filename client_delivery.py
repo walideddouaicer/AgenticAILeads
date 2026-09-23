@@ -157,6 +157,8 @@ def record_send(status, key, *, message, channel, contact, expected,
         raise ValueError("Enter the final message before recording a send")
     if channel not in ("linkedin", "email"):
         raise ValueError("Choose LinkedIn or email")
+    if str(message).startswith("Template needs correction:"):
+        raise ValueError("Correct the message template before recording a send")
     if not str(contact or "").strip():
         raise ValueError("Add a named contact before recording a send")
     now = now or datetime.now(timezone.utc)

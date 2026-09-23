@@ -230,6 +230,8 @@ def record_send(status, key, *, message, sample, channel, action_id=None,
     """Atomically record a real manual send and enforce the shared daily budget."""
     if not message or not str(message).strip():
         raise ValueError("Enter the final message before recording a send")
+    if str(message).startswith("Template needs correction:"):
+        raise ValueError("Correct the message template before recording a send")
     if channel not in ("linkedin", "email"):
         raise ValueError("Choose a usable send channel")
     now = local_now(now)
