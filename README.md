@@ -31,13 +31,13 @@ Open the local URL printed by Streamlit and sign in. The Windows equivalent is t
 1. In **Prospects**, import an agency CSV or add a person manually. Apollo search is optional. Check the agency and person details.
 2. Use **Signals** to add or discover agency boards, then refresh agency postings. Confirm board mappings before using a mandate as evidence.
 3. Review the prospect's current evidence and sample in **Prospects**. Correct missing contacts or niche details, edit the final message, and send it yourself through the selected channel.
-4. Record the send only after it happened. Work replies and follow-ups on the same screen; mark a client won when agreed. **Settings** holds prospect criteria and editable message templates.
+4. Record the send only after it happened. Work replies and follow-ups on the same screen; a reply that arrives before a follow-up is due is recorded from **All**. Mark a client won when agreed. **Settings** holds prospect criteria and editable message templates.
 
 The app does not send messages, enroll people in email sequences, or sync replies. The send record preserves the actual message and sample used.
 
 ## Deliver for a client
 
-1. In **Clients**, create a client profile with target roles, locations, exclusions, outreach channel, and agreed meeting rate.
+1. In **Clients**, choose **Create client**. For an agency marked won in Prospects, **Start from a won agency** prefills its name, stated niche and market; check them and enter the agreed meeting rate (0 if meetings are not charged) before saving.
 2. In **Signals**, add or discover employer boards and run a refresh. Only recently verified postings support current claims.
 3. Back in **Clients**, review matching jobs, select verified ones for backfill, inspect the source and contact, and correct the contact if needed.
 4. Edit the message, send it manually, and record the send, reply, and outcome. Record attended meetings once, link related leads, and mark whether each is free or chargeable. Export the selected client report CSV.

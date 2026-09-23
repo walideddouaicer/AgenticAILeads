@@ -1,6 +1,6 @@
 # Implementation status
 
-Updated: 23 September 2026. Scope: Phases 0–7 through portable operation and recovery.
+Updated: 23 September 2026. Scope: Phases 0–7 complete offline; Phase 8 rehearsal performed, founder acceptance pending.
 
 ## Checkpoints
 
@@ -26,6 +26,11 @@ Updated: 23 September 2026. Scope: Phases 0–7 through portable operation and r
   Hash: `ec6e950`.
 - Phase 7 operation/recovery checkpoint: `Add portable startup refresh and recovery gbt 14.0`.
   Hash: `7209ee3`.
+- `a7d9adf` — `Verify Ubuntu Python 3.13.15 operation gbt 15.0`.
+- Phase 8 rehearsal fixes: `2ad735e` — `Fix rehearsal message defects before manual sends gbt 16.0`;
+  `f9dd1e7` — `Close won-agency to client handoff gaps gbt 17.0`;
+  `d8ac3ab` — `Show recovery steps for damaged data files gbt 18.0`.
+  This Phase 8 record is `Record Phase 8 rehearsal and open release gates gbt 19.0`.
 
 | Phase | Status |
 |---|---|
@@ -37,7 +42,7 @@ Updated: 23 September 2026. Scope: Phases 0–7 through portable operation and r
 | 5 — minimum client delivery | Implemented offline at `gbt 12.0` |
 | 6 — dead paths and documentation | Implemented offline at `gbt 13.0` |
 | 7 — Linux operation and recovery | Implemented and exercised on Ubuntu Python 3.12.3 and 3.13.15; Docker run still unverified |
-| 8 — release rehearsal | Not started |
+| 8 — release rehearsal | Rehearsals A/B, browser, Linux 3.13.15 and live read-only board checks done; **not complete** until the founder walkthrough is observed and recorded |
 
 ## Starting inventory
 
@@ -371,6 +376,118 @@ and retained status. Docker had no daemon, so an actual container run remains
 unverified.
 No live provider call, outreach, push, deployment or schedule occurred.
 
-## Next phase
+## Phase 8 result
 
-Phase 8: integrated release rehearsal and founder acceptance walkthrough.
+### What was run
+
+- **Isolated suite.** `scripts/check.py` passed all 18 checks on Ubuntu 22.04.5
+  x86_64 with CPython **3.13.15** (uv-managed, fresh venv, all 37 pinned
+  packages, `pip check` clean) at `a7d9adf` and again at `d8ac3ab`, including
+  the Phase 3 queue and daily-budget regressions. It also passed on CPython
+  3.13.13 in a separate Linux container after each fix. The earlier WSL
+  Python 3.13.15 environment was not reachable from this session and was not
+  reused.
+- **Browser rehearsal.** A real headless Chromium drove the actual app
+  (`start.py`, login, CORS/XSRF on) against a new disposable data directory.
+  Board APIs were answered by controlled ATS-shaped responses (Greenhouse,
+  Lever, Ashby, Workable); every other outbound connection was blocked and the
+  request log shows only the four fixture boards. The clock was advanced by
+  restarting the server under libfaketime. The final scripted run passed
+  end to end on `d8ac3ab`. The harness (Playwright, libfaketime, fixtures) is
+  test-only and not part of the app or requirements.
+- **Rehearsal A (acquisition).** Clean directory seeded on first start; CSV
+  import previewed 3 accepted / 1 row-numbered rejection; employer and agency
+  boards added by URL on Signals; employer refresh; agency baseline, then a
+  second refresh produced one literal agency-posting signal; company and
+  agency-board identities confirmed. The agency showed a confirmed board
+  posting hook and a one-row sample with source link, board, check time and
+  "no named contact". The row was approved, the message edited (the edit
+  persisted into a second browser session), and a send recorded with the
+  reviewed sample; the budget showed 14 of 15. After restart at +4 days the
+  follow-up was due, the budget was back to 15 of 15, and the sample showed
+  "0 checked within 48 hours" until refresh. A refresh in which one board
+  returned malformed data kept that board's snapshot, marked it failed with
+  its last success, and warned on Signals. Follow-up, reply, call booked and
+  client won were recorded; history shows both sends with exact messages.
+- **Rehearsal B (delivery).** Clients offered "Start from a won agency"
+  (name, stated niche and market prefilled; rate empty and required). Three
+  verified London Java/data jobs were selectable; the JavaScript role, the
+  Berlin Java role and the remote-only data role did not match. After a contact was added manually the draft
+  greeted her by name; two manual sends were recorded with exact text. One
+  free and one chargeable attended meeting gave "Attended meetings 2" and
+  "Recorded estimate $100" at the $100 rate; the exported CSV has 3 lead and
+  2 meeting rows whose values match `client_meetings.json` and the send log.
+  Client actions left the agency's acquisition status unchanged.
+- **Backup and restore.** With the app stopped, `recovery.py backup` then
+  `restore` into a new directory validated checksums and refused an existing
+  target. Restored files were byte-identical to the source (excluding the
+  archive folder). A second server on the restored directory showed the same
+  send history, and its exported report was byte-identical to the original.
+- **Other states in the browser.** Empty Prospects/Clients, stale sample,
+  failed board and, after the fix below, a damaged `prospects_status.json`
+  (error plus recovery steps; Settings still usable; file untouched).
+  Screenshots at 1366×900 and Settings at 1280×720 were spot-checked for
+  readability.
+- **Live read-only board check (separate from mocks).** On 23 Sep 2026 at
+  22:00 UTC the desktop app's browser fetched six public boards once each
+  (GET only): Greenhouse `adyen` (217 jobs) and `future-talent` (0), Lever
+  `apolloresearch` (14), Ashby `airops` (19), Workable `huggingface` (8) and
+  `linuxrecruit` (0). The app's own parsers and snapshot validation accepted
+  all six current response shapes. Every parsed job had an HTTPS URL and a
+  location; Greenhouse job links now use `job-boards.greenhouse.io`. Both
+  sampled agency boards were valid but empty. Nothing was written to working
+  data. The app's Python HTTP path could not reach these hosts from either
+  sandbox, so live fetching through `signal_engine.py` itself is unverified.
+
+### Defects found and fixed
+
+- `gbt 16.0`: a client draft kept "Hi there" after its contact was added and
+  could be recorded that way; client templates with unknown fields returned
+  raw `{placeholders}` (sends now refuse the correction text); hooks placed
+  after a full stop were lowercase in follow-ups; one "Data Engineer" posting
+  derived the over-broad keyword "data".
+- `gbt 17.0`: client won gave no next step and Create client had no prefilled
+  profile; new clients silently defaulted to a $150 rate; the first reply card
+  was collapsed; outcome "won" is now labelled as a meeting attended; raw
+  stage keys in undo labels, stale Signals copy and the developer Deploy menu
+  were removed.
+- `gbt 18.0`: a damaged business file broke every screen with a traceback.
+Each fix has a regression check that fails on the previous code.
+
+### Release gates
+
+| Gate | Status |
+|---|---|
+| Both workflows work from supported screens | Passed in the controlled browser rehearsal; founder use unverified |
+| No code/file edits or remembered script order for ordinary work | Passed for daily work; full backup/restore remains a documented CLI procedure with the app stopped |
+| Single tested queue/eligibility/budget/stage/follow-up logic | Passed (suite and rehearsal budget counts agreed) |
+| Drafts, send records, sample evidence inspectable after restart | Passed after restart and after restore |
+| No fabricated hiring, contact, sample, revenue or performance claims | Passed with controlled data: stale evidence dropped the current-posting hook, failed boards stayed stale, estimate labelled; live copy quality unverified |
+| Distinct actionable empty/incomplete/stale/failed/corrupted states | Passed after `gbt 18.0` |
+| Concurrency, double clicks, interrupted writes, restore coverage | Passed (automated) plus rehearsed restore |
+| Configured data directory; no secrets/data in Git | Passed; only disposable directories were used; commits contain code, tests and docs only |
+| Reproducible Linux install; optional explicit scheduling | Passed on Ubuntu 22.04 with Python 3.13.15; no scheduler created; Docker run still unverified |
+| No external outreach from tests or startup | Passed; no messages sent, no provider calls |
+| Superseded screens/instructions and live email integrations gone | Passed; four screens only |
+| Browser rehearsal passed; founder walkthrough recorded separately | Browser rehearsal passed; **founder walkthrough not yet performed** |
+
+### Still unverified or open
+
+- Founder/friend acceptance walkthrough without developer narration.
+- Live fetching through the app's own HTTP client, agency board discovery
+  (`agency_discovery.py`) and employer discovery against live sites.
+- Apollo prospect search and contact enrichment: no credentials used and no
+  paid lookup run. The manual workflow did not need them.
+- Actual Docker run; Windows `start_app.bat` was not re-run in this phase.
+- Observations for the walkthrough, not changed: a current agency posting
+  replaces the stated niche for that prospect's sample until the posting goes
+  stale; client leads and the report show the board token rather than the
+  confirmed company name; an approved sample row can later list extra roles
+  from the same verified board; the new-meeting form keeps the previous
+  entries after saving; recording a reply before a follow-up is due is done
+  from the All view.
+
+## Next step
+
+The founder/friend acceptance walkthrough. Record what they could not find,
+understand or trust, fix concrete obstacles, then mark Phase 8 complete.
