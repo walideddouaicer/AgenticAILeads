@@ -114,7 +114,7 @@ with head_r:
 
 # hook — the thing that earns the reply
 src = item["hook_source"]
-badge = {"mandate": "🔥 live mandate", "niche": "🏷 stated niche"}.get(src, src)
+badge = {"mandate": "board posting", "niche": "stated niche"}.get(src, src)
 st.markdown(f"**Hook** ({badge})")
 st.info(item["hook"])
 if item.get("mandate_url"):
@@ -145,7 +145,7 @@ st.code(msg, language=None)
 # the gift
 gift = item.get("gift") or []
 if gift:
-    with st.expander(f"🎁 Mini-list — {len(gift)} companies hiring "
+    with st.expander(f"🎁 Sample — {len(gift)} board/company rows matching "
                      f"{', '.join(item['niche'][:3])} "
                      f"({item['gift_with_contacts']} with named contacts)"):
         st.dataframe(gift, width="stretch", hide_index=True)
@@ -159,9 +159,9 @@ if gift:
             file_name=f"minilist_{slug}_{date.today().isoformat()}.csv",
             mime="text/csv", key=f"gc_{key}", width="stretch")
     if item["gift_with_contacts"] == 0:
-        st.caption("⚠️ No named contacts in this gift. Run "
-                   "`python enrichment_engine.py --from-minilists` once an "
-                   "Apollo key is set — the offer says 'with contacts'.")
+        st.caption("No named contacts in this sample. Confirm company "
+                   "identities and add contacts manually, or run a "
+                   "provider lookup if configured.")
 else:
     st.caption("No mini-list — this prospect has no niche keywords, so "
                "there's nothing to build a gift from.")
@@ -173,6 +173,7 @@ label = item["agency"]
 with a1:
     if st.button("✅ Sent", key=f"sent_{key}", width="stretch",
                  type="primary",
+                 disabled=msg.startswith("Template needs correction:"),
                  help="Marks contacted and starts the follow-up timer."):
         if item["is_followup"]:
             C.mark_followed_up(status, key, label, C.PROSPECTS_STATUS)

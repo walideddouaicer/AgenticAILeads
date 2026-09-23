@@ -11,11 +11,27 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 GUARD = '''import socket
-def _offline(*args, **kwargs):
-    raise RuntimeError("Network disabled in offline test suite; mock the request")
-socket.socket.connect = _offline
-socket.socket.connect_ex = _offline
-socket.create_connection = _offline
+_connect = socket.socket.connect
+_connect_ex = socket.socket.connect_ex
+_create_connection = socket.create_connection
+def _local(address):
+    return (isinstance(address, tuple) and address and
+            address[0] in ("127.0.0.1", "::1", "localhost"))
+def _offline_connect(sock, address):
+    if _local(address):
+        return _connect(sock, address)
+    raise RuntimeError("External network disabled in offline test suite")
+def _offline_connect_ex(sock, address):
+    if _local(address):
+        return _connect_ex(sock, address)
+    raise RuntimeError("External network disabled in offline test suite")
+def _offline_create(address, *args, **kwargs):
+    if _local(address):
+        return _create_connection(address, *args, **kwargs)
+    raise RuntimeError("External network disabled in offline test suite")
+socket.socket.connect = _offline_connect
+socket.socket.connect_ex = _offline_connect_ex
+socket.create_connection = _offline_create
 '''
 
 
@@ -56,9 +72,9 @@ def main():
             env.pop(key, None)
         guard_check = (
             "import socket\n"
-            "try:\n    socket.create_connection(('127.0.0.1', 9))\n"
+            "try:\n    socket.create_connection(('203.0.113.1', 9))\n"
             "except RuntimeError as e:\n"
-            "    assert 'Network disabled' in str(e)\n"
+            "    assert 'External network disabled' in str(e)\n"
             "else:\n    raise AssertionError('Offline guard is not active')\n"
         )
         commands = [("offline-guard", ["-c", guard_check]),
@@ -70,6 +86,7 @@ def main():
                     ("sweep-commit", ["tests/test_sweep_commit.py"]),
                     ("engine-storage", ["tests/test_engine_storage.py"]),
                     ("matching", ["tests/test_matching.py"]),
+                    ("evidence", ["tests/test_evidence.py"]),
                     ("delivery", ["tests/test_delivery.py"]),
                     ("pages", ["tests/test_pages.py"]),
                     ("workflow-gaps", ["tests/test_workflow_gaps.py"])]

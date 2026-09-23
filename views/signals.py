@@ -23,7 +23,8 @@ from datetime import date
 import streamlit as st
 
 import common as C
-from storage import atomic_write_text
+from evidence import load_refreshes, verified_at
+from storage import atomic_write_text, read_json
 import sweep_core
 
 C.page_header("📡 Signals", "signals")
@@ -46,16 +47,17 @@ with st.expander("⚙️ Run engines", expanded=False):
     with r2:
         C.engine_button("enrich", key="sig_run_enrich",
                         extra_args=["--from-minilists", "--limit", 25],
-                        help_text="Finds decision-maker contacts for the "
-                                  "companies that actually appear in "
-                                  "prospect mini-lists (not the whole of "
-                                  "signals.csv). No-ops without an API key.")
+                        help_text="Looks up contacts only for recently "
+                                  "checked sample rows with confirmed "
+                                  "company identities. Uses a configured "
+                                  "provider; may spend credits.")
         st.caption("Mini-list companies → contacts")
     st.caption("The nightly chain (`run_sweep.bat`) already runs both — "
                "these are for when you don't want to wait.")
 
 wl = C.load_watchlist()
 counts = C.tracked_job_counts()
+refreshes = load_refreshes(C.BOARD_REFRESH_FILE)
 total_boards = sum(len(v) for v in wl.values())
 tab_boards, tab_jobs = st.tabs(
     [f"Boards ({total_boards})", "Jobs & history"])
@@ -69,7 +71,7 @@ with tab_boards:
         cols = st.columns(len(C.PLATFORMS))
         for col, p in zip(cols, C.PLATFORMS):
             live = sum(counts.get(f"{p}:{t}", 0) for t in wl.get(p, []))
-            col.metric(p.title(), len(wl.get(p, [])), f"{live} live jobs")
+            col.metric(p.title(), len(wl.get(p, [])), f"{live} stored roles")
 
     st.markdown("**Add a board**")
     url = st.text_input(
@@ -143,14 +145,60 @@ with tab_boards:
         q = st.text_input("Filter boards", key="sig_filter",
                           placeholder="token or platform")
         rows = [{"platform": p, "token": t,
-                 "live_jobs": counts.get(f"{p}:{t}", 0)}
+                 "stored_roles": counts.get(f"{p}:{t}", 0),
+                 "check_status": refreshes.get(f"{p}:{t}", {}).get(
+                     "status", "never checked"),
+                 "last_success": refreshes.get(f"{p}:{t}", {}).get(
+                     "last_success", "") or "",
+                 "current_evidence": bool(verified_at(f"{p}:{t}", refreshes))}
                 for p in C.PLATFORMS for t in wl.get(p, [])]
         if q.strip():
             ql = q.strip().lower()
             rows = [r for r in rows
                     if ql in r["token"] or ql in r["platform"]]
-        rows.sort(key=lambda r: -r["live_jobs"])
+        rows.sort(key=lambda r: -r["stored_roles"])
         st.dataframe(rows, width="stretch", hide_index=True)
+        failed = sum(1 for row in rows if row["check_status"] == "failed")
+        if failed:
+            st.warning(f"{failed} board check(s) failed most recently. "
+                       "Stored roles remain visible but require refresh "
+                       "before current-hiring claims.")
+
+        with st.expander("Confirm employer board identity"):
+            st.caption("Confirm the company behind a tracked board. A "
+                       "contact-cache key is optional; it connects existing "
+                       "contacts only after you verify the match.")
+            boards = sorted(f"{platform}:{token}"
+                            for platform, tokens in wl.items()
+                            for token in tokens)
+            selected = st.selectbox("Employer board", boards,
+                                    key="company_board_select")
+            mapping = read_json(C.COMPANY_BOARD_MAPPINGS, default={},
+                                expected_type=dict).get(selected, {})
+            company_name = st.text_input(
+                "Confirmed company name", mapping.get("company", ""),
+                key=f"company_name_{selected}",
+                help="Leave empty and save to remove an incorrect mapping.")
+            contact_key = st.text_input(
+                "Existing contact-cache key (optional)",
+                mapping.get("contacts_key", ""),
+                key=f"contact_key_{selected}",
+                help="Use only after checking the cached people belong to "
+                     "this company. Manual board-specific contacts need no key.")
+            domain = st.text_input(
+                "Confirmed company domain (optional)",
+                mapping.get("domain", ""), key=f"domain_{selected}",
+                help="Boards with the same confirmed domain may be grouped "
+                     "as one company in samples.")
+            if st.button("Save company identity", key="company_board_save"):
+                try:
+                    C.set_company_board(selected, company_name,
+                                        contact_key, domain)
+                except ValueError as error:
+                    st.error(str(error))
+                else:
+                    st.success("Company mapping saved.")
+                    st.rerun()
 
         drop = st.multiselect(
             "Remove boards", [f"{r['platform']}:{r['token']}" for r in rows],
@@ -222,6 +270,10 @@ with tab_jobs:
             "days_open": f.get("days_open", ""),
             "reposts": f.get("repost_count", ""),
             "platform": j.get("platform", ""),
+            "board": j.get("board_key", ""),
+            "verified_at": (j.get("observed_at", "")
+                            if j.get("observed_at") == verified_at(
+                                j.get("board_key", ""), refreshes) else ""),
             "url": j.get("url", ""),
         })
 
@@ -239,8 +291,9 @@ with tab_jobs:
             "is fine. **Run the sweep** (Run engines, above) and they'll "
             "show a real city.")
 
-    st.caption(f"{len(rows):,} live jobs across {len(counts)} board(s) — the "
-               "pool every mini-list is built from. `days_open` and "
+    st.caption(f"{len(rows):,} stored roles across {len(counts)} board(s); "
+               f"{sum(1 for r in rows if r['verified_at'])} have a recent "
+               "successful board check. `days_open` and "
                "`reposts` come from the history file.")
 
     f1, f2, f3 = st.columns([2, 1, 1])

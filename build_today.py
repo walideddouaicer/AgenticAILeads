@@ -75,21 +75,13 @@ TIER_BULK = "bulk"        # email sequence only
 
 
 def hook_for(prospect, mandates):
-    """(hook, source). Mandate-based when we have one, else the niche."""
+    """(hook, source). Only confirmed, current board postings reach here."""
     if mandates:
         m = mandates[0]
         title = (m.get("mandate_title") or "").strip()
         loc = (m.get("location") or "").strip()
-        try:
-            age = (date.today()
-                   - date.fromisoformat(m.get("date", ""))).days
-        except ValueError:
-            age = None
         where = f" in {loc}" if loc else ""
-        if age is not None and age > core.FRESH_DAYS:
-            return f"saw you've been working a {title} mandate{where}", "mandate"
-        return (m.get("hook") or
-                f"saw you're working a {title} mandate{where}"), "mandate"
+        return f"saw your board advertising a {title} role{where}", "mandate"
     return "", "none"
 
 
@@ -184,6 +176,10 @@ def build(n=DEFAULT_N, minilist_n=MINILIST_N):
         template = (cfg["followup2_template"] if fu >= core.MAX_FOLLOWUPS - 1
                     else cfg["followup_template"]) if is_followup \
             else cfg["dm_template"]
+        message = core.render_prospect_dm(template, p, hook)
+        if message.startswith("Template needs correction:"):
+            skipped["message template needs correction"] += 1
+            continue
 
         item = {
             "key": key,
@@ -198,7 +194,7 @@ def build(n=DEFAULT_N, minilist_n=MINILIST_N):
             "hook_source": hook_src,
             "niche": kws,
             "niche_source": niche_src,
-            "message": core.render_prospect_dm(template, p, hook),
+            "message": message,
             "is_followup": is_followup,
             "followup_number": fu + 1 if is_followup else 0,
             "mandate_url": (mandates[0].get("url", "") if mandates else ""),

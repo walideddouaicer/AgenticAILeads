@@ -12,7 +12,9 @@ from datetime import date, datetime
 import streamlit as st
 
 import common as C
+from evidence import load_refreshes, verified_at
 from minilist_engine import build_minilist, render_csv, render_table
+from storage import read_json
 
 C.page_header("🧲 Prospects", "prospects")
 
@@ -95,10 +97,10 @@ with st.expander("⚙️ Run prospecting engines",
                         help_text="Probes your prospects' agency names "
                                   "across all 4 ATS platforms, adds the ones "
                                   "that look like agency boards, then sweeps "
-                                  "them for live mandates. A brand-new board "
-                                  "baselines silently, so it yields hooks on "
-                                  "the SECOND run, not the first.")
-        st.caption("Find their boards → sweep → fresh hooks")
+                                  "them for advertised roles. Confirm the "
+                                  "agency-board mapping below before using "
+                                  "postings in a message.")
+        st.caption("Find boards → inspect → confirm mapping")
     with e3:
         n_boards = 0
         if C.AGENCY_WATCHLIST_FILE.exists():
@@ -115,6 +117,44 @@ with st.expander("⚙️ Run prospecting engines",
                        "rate here.")
         st.caption(f"{len(signals)} mandate signal(s) on file")
 
+with st.expander("Confirm which agency owns a board"):
+    st.caption("Discovery suggests boards from names and posting patterns. "
+               "Select a prospect agency and confirm its actual board "
+               "before its postings can support a message.")
+    agency_names = sorted({p.get("agency", "").strip() for p in prospects
+                           if p.get("agency", "").strip()})
+    watch = read_json(C.AGENCY_WATCHLIST_FILE, default={}, expected_type=dict)
+    board_options = sorted(f"{platform}:{token}"
+                           for platform, tokens in watch.items()
+                           for token in tokens)
+    mappings = read_json(C.AGENCY_BOARD_MAPPINGS, default={},
+                         expected_type=dict)
+    checks = load_refreshes(C.AGENCY_REFRESH_FILE)
+    suggestions = read_json(C.DATA_DIR / "agency_board_suggestions.json",
+                            default={}, expected_type=dict)
+    if agency_names and board_options:
+        selected_agency = st.selectbox("Agency", agency_names,
+                                       key="confirm_agency_name")
+        agency_id = selected_agency.casefold()
+        st.caption("Suggested: " + (", ".join(suggestions.get(agency_id, []))
+                                    or "none; inspect the board before confirming"))
+        selected_boards = st.multiselect(
+            "Confirmed boards", board_options,
+            default=mappings.get(agency_id, []), key=f"agency_boards_{agency_id}")
+        for board in selected_boards:
+            check = checks.get(board, {})
+            st.caption(f"{board}: {check.get('status', 'never checked')}; "
+                       f"last successful check "
+                       f"{check.get('last_success') or 'unknown'}; "
+                       + ("current evidence" if verified_at(board, checks)
+                          else "refresh required"))
+        if st.button("Save confirmed boards", key="save_agency_boards"):
+            C.set_agency_boards(selected_agency, selected_boards)
+            st.success("Confirmed board mapping saved.")
+            st.rerun()
+    else:
+        st.info("Add a prospect and discover or add an agency board first.")
+
 if not prospects:
     st.info("**No prospects yet.** This page fills from `prospects.csv`.")
     st.markdown(
@@ -122,8 +162,8 @@ if not prospects:
         "and sanity-check the response (right filters, right countries)\n"
         "2. Then click **Run Prospector** above (or run "
         "`python prospector_engine.py`)\n"
-        "3. Optional but powerful: **Agency board discovery** → **Mandate "
-        "sweep** gives every prospect a fresh, specific hook\n\n"
+        "3. Optionally discover agency boards, inspect them and confirm "
+        "their mapping before using a posting as a hook\n\n"
         "You can also add rows to `prospects.csv` by hand — columns: "
         "`date_found, agency, person_name, person_title, linkedin, email, "
         "location, size, source, niche_keywords`.")
@@ -167,20 +207,13 @@ def niche_for(k, p):
 
 
 def hook_for(k, p):
-    """Latest mandate hook (age-degraded like lead hooks) → niche fallback."""
+    """A confirmed, recently checked posting or a stated-niche fallback."""
     ms = mandates[k]
     if ms:
         m = ms[0]
-        try:
-            age = (date.today()
-                   - datetime.strptime(m.get("date", ""), "%Y-%m-%d").date()).days
-        except ValueError:
-            age = None
-        if age is not None and age > C.FRESH_DAYS:
-            loc = m.get("location", "")
-            return (f"saw you've been working a {m.get('mandate_title', '')} "
-                    "mandate" + (f" in {loc}" if loc else "")), "mandate"
-        return m.get("hook", ""), "mandate"
+        loc = m.get("location", "")
+        return (f"saw your board advertising a {m.get('mandate_title', '')} "
+                "role" + (f" in {loc}" if loc else "")), "board posting"
     kws, src = niche_for(k, p)
     if kws:
         return f"saw you specialize in {' / '.join(kws[:3])} placements", "niche"
@@ -271,7 +304,7 @@ def prospect_card(k, p, kind, i):
 
     icon = {"fu": "🔁 ", "new": "🆕 ", "play": "💬 "}[kind]
     head = (f"{icon}{person} — {p.get('person_title', '?')}  [{agency}]"
-            + ("  · 🎣 mandate hook" if hook_src == "mandate" else ""))
+            + ("  · 🎣 board posting" if hook_src == "board posting" else ""))
     with st.expander(head, expanded=(i == 0 and kind != "play")):
         st.markdown(C.stage_badge(eff, due), unsafe_allow_html=True)
         meta = " · ".join(x for x in [
@@ -290,7 +323,7 @@ def prospect_card(k, p, kind, i):
         # mandates & hook
         ms = mandates[k]
         if ms:
-            st.caption(f"Latest mandate ({ms[0].get('date', '')}): "
+            st.caption(f"Confirmed board posting ({ms[0].get('date', '')}): "
                        f"**{ms[0].get('mandate_title', '')}** "
                        f"{ms[0].get('location', '')} · "
                        f"{len(ms)} mandate signal(s) on file")
@@ -309,8 +342,13 @@ def prospect_card(k, p, kind, i):
                        + f" — last touch {(entry or {}).get('on', '?')}")
         else:
             tmpl = pcfg["dm_template"]
+        draft = C.render_prospect_dm(tmpl, p, hook)
+        template_invalid = draft.startswith("Template needs correction:")
         if kind != "play":
-            st.code(C.render_prospect_dm(tmpl, p, hook), language=None)
+            if template_invalid:
+                st.error(draft)
+            else:
+                st.code(draft, language=None)
 
         # niche keywords + one-click mini-list (the door-opener)
         kws, kw_src = niche_for(k, p)
@@ -340,9 +378,11 @@ def prospect_card(k, p, kind, i):
                                      contacts_file=C.CONTACTS_CACHE)
             if ml_rows:
                 n_contact = sum(1 for r in ml_rows if r["contact_name"])
-                st.caption(f"🎁 Mini-list ready: **{len(ml_rows)} companies** "
-                           f"hiring {', '.join(kws[:3])} right now "
-                           f"({n_contact} with contacts) — the door-opener.")
+                current = sum(1 for r in ml_rows if r.get("verified_at"))
+                st.caption(f"🎁 Sample: **{len(ml_rows)} board/company rows**, "
+                           f"{current} checked within 48 hours, "
+                           f"{n_contact} with named contacts. Review each "
+                           "source before sending.")
                 slug = "".join(c if c.isalnum() else "-"
                                for c in agency.lower()).strip("-") or "prospect"
                 fname = f"minilist_{slug}_{date.today().isoformat()}"
@@ -373,6 +413,7 @@ def prospect_card(k, p, kind, i):
             with b1:
                 if st.button("🔁 Followed up", key=f"pfu_{k}",
                              type="primary", width="stretch",
+                             disabled=template_invalid,
                              help="Logs the follow-up and resets the "
                                   f"{C.FOLLOWUP_DAYS}-day timer."):
                     C.mark_followed_up(status, k, label,
@@ -390,6 +431,7 @@ def prospect_card(k, p, kind, i):
             with b1:
                 if st.button("✅ Sent — mark contacted", key=f"pct_{k}",
                              type="primary", width="stretch",
+                             disabled=template_invalid,
                              help="Click after you actually sent the DM — "
                                   "starts the follow-up timer."):
                     C.set_stage(status, k, "contacted", lead_label=label,

@@ -51,8 +51,10 @@ import csv
 import json
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import requests
 import contacts as contacts_api
 from runtime import DATA_DIR, ENV_FILE
 from storage import (atomic_write_text, read_json, render_csv,
@@ -65,6 +67,8 @@ SIGNALS_CSV = DATA_DIR / "signals.csv"
 OUT_CSV = DATA_DIR / "enriched_signals.csv"
 CACHE_FILE = DATA_DIR / "enriched_contacts.json"
 DOMAINS_FILE = DATA_DIR / "company_domains.json"
+MAPPINGS_FILE = DATA_DIR / "company_board_mappings.json"
+LOOKUP_FILE = DATA_DIR / "contact_lookup_status.json"
 
 RATE_LIMIT_SLEEP = 2.0     # free tier: 50/min, 600/day — stay far under
 CONTACTS_PER_COMPANY = contacts_api.CONTACTS_PER_COMPANY
@@ -77,14 +81,23 @@ def load_json(path: Path, default):
 # ------------------------- which companies -------------------------
 
 def companies_from_signals() -> list:
-    """Distinct companies in signals.csv — the client-lead pipeline."""
+    """Only explicitly mapped companies from client signals."""
     if not SIGNALS_CSV.exists():
         sys.exit("signals.csv not found — run signal_engine.py first.")
     with SIGNALS_CSV.open(newline="", encoding="utf-8") as stream:
         rows = list(csv.DictReader(stream))
     if not rows:
         sys.exit("signals.csv is empty.")
-    return sorted({r["company"] for r in rows if r.get("company")})
+    mappings = load_json(MAPPINGS_FILE, {})
+    targets = set()
+    for row in rows:
+        board = f"{row.get('platform', '')}:{row.get('company', '')}".lower()
+        mapping = mappings.get(board)
+        if isinstance(mapping, dict):
+            key = mapping.get("contacts_key") or mapping.get("company")
+            if key:
+                targets.add(key)
+    return sorted(targets)
 
 
 def companies_from_minilists(n_per_list: int = 10) -> list:
@@ -108,17 +121,58 @@ def companies_from_minilists(n_per_list: int = 10) -> list:
     if not prospects:
         sys.exit("prospects.csv not found or empty — nothing to build "
                  "mini-lists from. Run the prospector or import a list.")
+    mappings = load_json(MAPPINGS_FILE, {})
     tally = Counter()
     for p in prospects:
         kws = core.parse_csv_line(p.get("niche_keywords") or "")
         if not kws:
             continue
         for row in build_minilist(kws, n=n_per_list):
-            tally[row["company"]] += 1
+            if not row.get("verified_at"):
+                continue
+            mapping = mappings.get(row.get("source_board"), {})
+            if isinstance(mapping, dict):
+                key = mapping.get("contacts_key") or mapping.get("company")
+                if key:
+                    tally[key] += 1
     if not tally:
-        sys.exit("No mini-list companies — prospects have no niche_keywords, "
-                 "or no tracked jobs match them.")
+        sys.exit("No mapped mini-list companies — review matching jobs and "
+                 "confirm their board-to-company identity before a provider lookup.")
     return [c for c, _ in tally.most_common()], tally
+
+
+def merge_contacts(current, found):
+    """Keep manual/corrected fields; fill blanks and add distinct people."""
+    merged = [dict(c) for c in (current or []) if isinstance(c, dict)]
+    for incoming in found:
+        if not isinstance(incoming, dict):
+            continue
+        existing = next((c for c in merged if any(
+            incoming.get(field) and str(incoming[field]).strip().casefold()
+            == str(c.get(field) or "").strip().casefold()
+            for field in ("linkedin", "email", "name"))), None)
+        if existing is None:
+            merged.append(dict(incoming))
+        else:
+            for field in ("name", "title", "linkedin", "email"):
+                if not existing.get(field) and incoming.get(field):
+                    existing[field] = incoming[field]
+    return merged
+
+
+def lookup_due(company, cache, checks, now, refresh_days=30,
+               retry_empty_days=7):
+    entry = checks.get(company, {})
+    try:
+        last = datetime.fromisoformat(entry.get("last_attempt", ""))
+        if last.tzinfo is None:
+            raise ValueError("naive time")
+    except (TypeError, ValueError):
+        # Existing contacts without provider metadata may be manual. Do not
+        # spend credits refreshing them automatically.
+        return not bool(cache.get(company))
+    days = refresh_days if cache.get(company) else retry_empty_days
+    return now - last >= timedelta(days=days)
 
 
 def companies_from_arg(value: str) -> list:
@@ -142,6 +196,12 @@ def main():
                          "run this FIRST after any plan or key change")
     ap.add_argument("--limit", type=int, default=100,
                     help="max API calls this run (default 100)")
+    ap.add_argument("--refresh-days", type=int, default=30,
+                    help="refresh old provider results after this many days")
+    ap.add_argument("--retry-empty-days", type=int, default=7,
+                    help="retry no-result lookups after this many days")
+    ap.add_argument("--force-refresh", action="store_true",
+                    help="explicitly recheck selected companies, including manual contacts")
     ap.add_argument("--provider", default=None,
                     help=f"force a provider "
                          f"({', '.join(c.name for c in contacts_api.PROVIDERS)}); "
@@ -160,10 +220,32 @@ def main():
     args = ap.parse_args()
 
     domains = load_json(DOMAINS_FILE, {})
+    mapped_domains = {}
+    for mapping in load_json(MAPPINGS_FILE, {}).values():
+        if isinstance(mapping, dict) and mapping.get("domain"):
+            key = mapping.get("contacts_key") or mapping.get("company")
+            if key:
+                mapped_domains.setdefault(key, set()).add(mapping["domain"])
+    for key, choices in mapped_domains.items():
+        if key not in domains and len(choices) == 1:
+            domains[key] = next(iter(choices))
 
     provider = (contacts_api.get_provider(args.provider, env_file=ENV_FILE)
                 if args.provider
                 else contacts_api.active_provider(env_file=ENV_FILE))
+
+    if args.probe:
+        if provider is None or not provider.is_configured():
+            sys.exit("No contact provider configured; add a key before probing.")
+        try:
+            parsed, raw = provider.find_contacts(
+                args.probe, domains.get(args.probe))
+        except contacts_api.ProviderForbidden as e:
+            sys.exit(str(e))
+        print(json.dumps(raw, indent=2)[:4000])
+        print("\n--- parsed contacts ---")
+        print(json.dumps(parsed, indent=2))
+        return
 
     # ---- pick the company set (free, no API calls) ----
     tally = None
@@ -192,22 +274,14 @@ def main():
               "Nothing spent, nothing changed.")
         return
 
-    if args.probe:
-        try:
-            parsed, raw = provider.find_contacts(
-                args.probe, domains.get(args.probe))
-        except contacts_api.ProviderForbidden as e:
-            sys.exit(str(e))
-        print(json.dumps(raw, indent=2)[:4000])
-        print("\n--- parsed contacts ---")
-        print(json.dumps(parsed, indent=2))
-        return
-
     cache = load_json(CACHE_FILE, {})
-    todo = [c for c in companies if not cache.get(c)]
+    checks = load_json(LOOKUP_FILE, {})
+    now = datetime.now(timezone.utc)
+    todo = [c for c in companies if args.force_refresh or lookup_due(
+        c, cache, checks, now, args.refresh_days, args.retry_empty_days)]
     print(f"provider: {provider.name} | source: {source}")
     print(f"{len(companies)} company/companies — {len(todo)} need enrichment "
-          f"(rest already cached, never re-queried)")
+          "(recent lookups and manual-only contacts are held)")
 
     calls = 0
     for company in todo:
@@ -221,6 +295,12 @@ def main():
             # rest of the run on calls that will all fail the same way.
             print(str(e))
             break
+        except requests.RequestException as e:
+            update_json_record(LOOKUP_FILE, company, lambda current: {
+                "last_attempt": datetime.now(timezone.utc).isoformat(),
+                "status": "failed", "provider": provider.name})
+            print(f"  [!] {company}: lookup failed ({e.__class__.__name__})")
+            continue
         calls += 1
         if found == contacts_api.RATE_LIMITED:
             print("  [!] rate limited — stopping, re-run later.")
@@ -228,8 +308,12 @@ def main():
         if found:
             _, saved, _ = update_json_record(
                 CACHE_FILE, company,
-                lambda current: found if not current else current)
+                lambda current: merge_contacts(current, found))
             cache[company] = saved
+        update_json_record(LOOKUP_FILE, company, lambda current: {
+            "last_attempt": datetime.now(timezone.utc).isoformat(),
+            "status": "found" if found else "empty",
+            "provider": provider.name})
         label = (f"{len(found)} contact(s)" if found
                  else "ZERO contacts (not cached; check name/domain)")
         print(f"  {company}: {label}")
@@ -256,8 +340,13 @@ def main():
             if col not in fieldnames:
                 fieldnames.append(col)
 
+    mappings = load_json(MAPPINGS_FILE, {})
     for r in rows:
-        contacts = cache.get(r["company"], [])
+        board = f"{r.get('platform', '')}:{r.get('company', '')}".lower()
+        mapping = mappings.get(board, {})
+        linked = (mapping.get("contacts_key") or mapping.get("company")) \
+            if isinstance(mapping, dict) else ""
+        contacts = cache.get(board) or (cache.get(linked) if linked else []) or []
         for i, c in enumerate(contacts[:CONTACTS_PER_COMPANY], 1):
             for k, v in c.items():
                 r[f"contact{i}_{k}"] = v

@@ -28,8 +28,8 @@ Business rules preserved exactly:
                 LEGACY_MAP migrates old names on load.
   - follow-ups  due FOLLOWUP_DAYS after the last touch; after
                 MAX_FOLLOWUPS (the breakup) the lead leaves the queue.
-  - hooks       older than FRESH_DAYS degrade from "just opened" to
-                "currently hiring" (display_hook).
+  - hooks       present-tense wording requires a recent successful board
+                check and a still-listed role (display_hook).
 
 Mutators come in two halves. apply_stage()/apply_followup() here do the
 file write and nothing else, so a script can use them. common.set_stage()
@@ -49,6 +49,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 import delivery
+from evidence import confirmed_boards, load_refreshes, verified_at
 from filter_engine import DEFAULTS, keyword_matches
 from storage import (DELETE, UNSET, atomic_write_json, read_json, revision,
                      update_json, update_json_record)
@@ -58,6 +59,7 @@ CONFIG_DIR = DATA_DIR / "configs"
 SIGNALS_CSV = DATA_DIR / "signals.csv"
 ENRICHED_CSV = DATA_DIR / "enriched_signals.csv"
 CONTACTS_CACHE = DATA_DIR / "enriched_contacts.json"
+COMPANY_BOARD_MAPPINGS = DATA_DIR / "company_board_mappings.json"
 STATE_FILE = DATA_DIR / "signals_state.json"
 INBOX_STATUS = DATA_DIR / "inbox_status.json"
 WATCHLIST_FILE = DATA_DIR / "watchlist.json"
@@ -69,6 +71,10 @@ PROSPECT_SIGNALS_CSV = DATA_DIR / "prospect_signals.csv"
 PROSPECTS_STATUS = DATA_DIR / "prospects_status.json"
 PROSPECTS_CONFIG = DATA_DIR / "prospects_config.json"
 AGENCY_WATCHLIST_FILE = DATA_DIR / "agency_watchlist.json"
+AGENCY_BOARD_MAPPINGS = DATA_DIR / "agency_board_mappings.json"
+AGENCY_REFRESH_FILE = DATA_DIR / "agency_board_refresh.json"
+AGENCY_STATE_FILE = DATA_DIR / "prospect_signals_state.json"
+BOARD_REFRESH_FILE = DATA_DIR / "board_refresh.json"
 
 DEFAULT_TEMPLATE = (
     "Hi {first_name} — {hook}. Roles like that are exactly what we place. "
@@ -92,7 +98,7 @@ DEFAULT_FOLLOWUP2_TEMPLATE = (
 )
 FOLLOWUP_DAYS = 3
 MAX_FOLLOWUPS = 2   # after follow-up #2 (breakup), lead leaves the queue
-FRESH_DAYS = 7      # signals older than this switch to "currently hiring" wording
+FRESH_DAYS = 7      # legacy UI constant; current evidence uses 48-hour checks
 DEFAULT_MEETING_RATE = 150
 DAILY_QUEUE_CAP = 15   # default new sends/day (LinkedIn-safe)
 
@@ -111,10 +117,9 @@ DEFAULT_PROSPECT_DM = (
     "yourself. Worth a 15-minute call?"
 )
 DEFAULT_PROSPECT_FOLLOWUP = (
-    "Hi {first_name} — floating this back up. {hook} — happy to send a free "
-    "sample first: 10 companies hiring exactly what you place, with the "
-    "decision-maker contacts. Pay per showed meeting, first one free. "
-    "Want the list?"
+    "Hi {first_name} — floating this back up. {hook} — happy to review "
+    "relevant hiring posts and any contacts we can confirm together. "
+    "Pay per showed meeting, first one free. Want to see it?"
 )
 DEFAULT_PROSPECT_FOLLOWUP2 = (
     "Hi {first_name} — last note from me. If direct-client acquisition ever "
@@ -226,11 +231,18 @@ def load_leads():
     with src.open(newline="", encoding="utf-8") as stream:
         rows = list(csv.DictReader(stream))
     cache = read_json(CONTACTS_CACHE, default={}, expected_type=dict)
+    mappings = read_json(COMPANY_BOARD_MAPPINGS, default={}, expected_type=dict)
     for r in rows:
         if not r.get("client"):
             r["client"] = "default"
         if not r.get("contact1_name"):
-            for i, c in enumerate((cache.get(r.get("company", "")) or [])[:2], 1):
+            board = f"{r.get('platform', '')}:{r.get('company', '')}".lower()
+            mapping = mappings.get(board, {})
+            linked_key = (mapping.get("contacts_key") or mapping.get("company")) \
+                if isinstance(mapping, dict) else ""
+            matched = cache.get(board) or (cache.get(linked_key) if linked_key
+                                           else []) or []
+            for i, c in enumerate(matched[:2], 1):
                 for k, v in c.items():
                     r[f"contact{i}_{k}"] = v
     label = src.name + (" + contacts" if cache else "")
@@ -337,19 +349,20 @@ def all_clients(leads):
 
 
 def display_hook(row):
-    """Hook wording follows the signal's age: fresh (<= FRESH_DAYS) keeps the
-    stored 'just opened' hook; older signals degrade to 'currently hiring'
-    so a DM never claims recency the posting doesn't have."""
-    d = row.get("date") or ""
-    try:
-        age = (date.today() - datetime.strptime(d, "%Y-%m-%d").date()).days
-    except ValueError:
-        age = None
-    if age is not None and age > FRESH_DAYS:
-        loc = row.get("location", "")
-        return (f"saw you're currently hiring a {row.get('title', '')}"
-                + (f" in {loc}" if loc else ""))
-    return row.get("hook", "")
+    """Only a recent successful board check can support a current claim."""
+    platform = row.get("platform", "")
+    token = row.get("company", "")
+    board = f"{platform}:{token}" if platform and token else ""
+    checks = load_refreshes(BOARD_REFRESH_FILE)
+    checked = verified_at(board, checks) if board else None
+    state = read_json(STATE_FILE, default={}, expected_type=dict)
+    live = any(j.get("url") == row.get("url")
+               and j.get("observed_at") == checked
+               for j in state.get(board, {}).values()) if checked else False
+    if live:
+        return (f"saw your board advertising a {row.get('title', '')} role"
+                + (f" in {row['location']}" if row.get("location") else ""))
+    return f"previously saw a {row.get('title', '')} posting on your board"
 
 
 def render_dm(template, row):
@@ -499,19 +512,79 @@ def prospect_key(row):
     return hashlib.md5(raw.encode()).hexdigest()[:12]
 
 
-def mandates_for_agency(agency_name, signals):
-    """prospect_signals rows for one agency, fuzzy-matched on the
-    normalized (slugged) agency name vs the board token, newest first."""
-    from discovery_engine import slug_variants
-    variants = slug_variants(agency_name)
-    if not variants:
+def mandates_for_agency(agency_name, signals, *, mappings_file=None,
+                       refresh_file=None, state_file=None, now=None):
+    """Current postings on explicitly mapped, recently checked agency boards.
+
+    Legacy token-only signal rows have no platform identity and stay visible in
+    the CSV, but cannot substantiate a prospect's copy.
+    """
+    mappings = read_json(mappings_file or AGENCY_BOARD_MAPPINGS,
+                         default={}, expected_type=dict)
+    boards = confirmed_boards(agency_name, mappings)
+    if not boards:
         return []
-    hits = [s for s in signals if s.get("agency") in variants]
-    if not hits:
-        hits = [s for s in signals
-                if any(v in (s.get("agency") or "") or (s.get("agency") or "") in v
-                       for v in variants)]
-    return hits
+    checks = load_refreshes(refresh_file or AGENCY_REFRESH_FILE)
+    state = read_json(state_file or AGENCY_STATE_FILE,
+                      default={}, expected_type=dict)
+    live_urls = {key: {j.get("url") for j in state.get(key, {}).values()
+                       if j.get("observed_at") == verified_at(key, checks, now)}
+                 for key in boards}
+    return [s for s in signals
+            if s.get("agency") in boards
+            and verified_at(s["agency"], checks, now)
+            and s.get("url") in live_urls.get(s["agency"], set())]
+
+
+def set_agency_boards(agency_name, boards):
+    """Operator-confirmed agency association; discovery never calls this."""
+    name = str(agency_name or "").strip().casefold()
+    if not name:
+        raise ValueError("Choose an agency name first")
+    watchlist = read_json(AGENCY_WATCHLIST_FILE, default={}, expected_type=dict)
+    known = {f"{p}:{token}" for p, tokens in watchlist.items()
+             for token in tokens}
+    chosen = {str(key).strip().lower() for key in boards}
+    if not chosen.issubset(known):
+        raise ValueError("Choose only boards in the agency watchlist")
+
+    def save(latest):
+        if chosen:
+            latest[name] = sorted(chosen)
+        else:
+            latest.pop(name, None)
+        return latest
+
+    return update_json(AGENCY_BOARD_MAPPINGS, save, default={},
+                       expected_type=dict, indent=2)
+
+
+def set_company_board(board, company, contacts_key="", domain=""):
+    """Operator-confirmed employer identity and optional contact cache key."""
+    board = str(board or "").strip().lower()
+    watchlist = read_json(WATCHLIST_FILE, default={}, expected_type=dict)
+    known = {f"{p}:{token}" for p, tokens in watchlist.items()
+             for token in tokens}
+    if board not in known:
+        raise ValueError("Choose a tracked employer board")
+    company = str(company or "").strip()
+    contacts_key = str(contacts_key or "").strip()
+    domain = str(domain or "").strip().lower().removeprefix("https://") \
+        .removeprefix("http://").strip("/")
+    if domain and not re.fullmatch(r"[a-z0-9.-]+\.[a-z]{2,}", domain):
+        raise ValueError("Enter a domain such as example.com")
+
+    def save(latest):
+        if company:
+            latest[board] = {"company": company,
+                             "contacts_key": contacts_key,
+                             "domain": domain}
+        else:
+            latest.pop(board, None)
+        return latest
+
+    return update_json(COMPANY_BOARD_MAPPINGS, save, default={},
+                       expected_type=dict, indent=2)
 
 
 _NICHE_STOPWORDS = {
@@ -707,7 +780,8 @@ def render_prospect_dm(template, prospect, hook):
     try:
         return template.format(**fields)
     except (KeyError, IndexError, ValueError):
-        return template
+        return ("Template needs correction: check its placeholders before "
+                "sending this message.")
 
 
 # ============================ watchlist ============================

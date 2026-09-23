@@ -6,6 +6,7 @@ from datetime import date
 import streamlit as st
 
 import common as C
+from evidence import load_refreshes, verified_at
 from filter_engine import evaluate_job, DEFAULTS
 from storage import append_csv_unique, atomic_write_json
 
@@ -182,7 +183,7 @@ with col_test:
         st.success("PASSES this config")
         st.caption("DM preview with this job:")
         st.code(C.render_dm(new_cfg["dm_template"],
-                            {"hook": f"saw you just opened a {t_title} role in {t_loc}",
+                            {"hook": f"saw your board advertising a {t_title} role in {t_loc}",
                              "company": "acme", "title": t_title,
                              "location": t_loc, "client": new_cfg["client_id"]}),
                 language=None)
@@ -199,26 +200,36 @@ with col_test:
         C.render_engine_panel()
         C.engine_button("sweep", key="cfg_run_sweep")
     else:
+        refreshes = load_refreshes(C.BOARD_REFRESH_FILE)
         hits = []
         for j in jobs:
             r = evaluate_job(j, new_cfg | {"client_id": new_cfg["client_id"] or "draft"})
             if r:
+                checked = verified_at(j.get("board_key", ""), refreshes)
                 hits.append({"company": j.get("company", ""),
                              "title": j["title"], "location": j["location"],
-                             "url": j.get("url", ""), "platform": j.get("platform", "")})
+                             "url": j.get("url", ""), "platform": j.get("platform", ""),
+                             "verified_at": checked if checked == j.get(
+                                 "observed_at") else ""})
         st.metric("Jobs this config would catch", f"{len(hits)} / {len(jobs)}",
                   help="How many of ALL currently tracked live jobs pass "
                        "this config's gates.")
         if hits:
             hits.sort(key=lambda x: (x["company"], x["title"]))
-            st.dataframe([{k: h[k] for k in ("company", "title", "location")}
+            st.dataframe([{k: h[k] for k in ("company", "title", "location",
+                                             "verified_at")}
                           for h in hits], width="stretch", height=320)
 
             # ---- backfill: give a new client today's live matches, not just future diffs ----
             cid = new_cfg["client_id"]
+            current_hits = [h for h in hits if h["verified_at"]]
+            if not current_hits:
+                st.warning("No matches have a recent successful board check. "
+                           "Refresh boards before backfilling client leads.")
             if cid:
-                if st.button(f"📥 Backfill these {len(hits)} matches to '{cid}' "
+                if st.button(f"📥 Backfill these {len(current_hits)} verified matches to '{cid}' "
                              "(skips duplicates)", width="stretch",
+                             disabled=not current_hits,
                              help="Appends today's live matches to signals.csv "
                                   "as leads for this client, so a new client "
                                   "doesn't wait for future diffs. Safe to "
@@ -230,16 +241,16 @@ with col_test:
                         "platform": h["platform"], "company": h["company"],
                         "title": h["title"], "location": h["location"],
                         "score": "", "url": h["url"],
-                        "hook": f"saw you're currently hiring a {h['title']}"
+                        "hook": f"saw your board advertising a {h['title']} role"
                                 + (f" in {h['location']}" if h["location"] else ""),
-                    } for h in hits]
+                    } for h in current_hits]
                     added = append_csv_unique(
                         C.SIGNALS_CSV, rows, fieldnames,
                         key=lambda row: (
                             row.get("client", ""), row.get("company", ""),
                             row.get("title", "")))
                     st.success(f"Backfilled {added} lead(s) to {cid} "
-                               f"({len(hits) - added} duplicates skipped). "
+                               f"({len(current_hits) - added} duplicates skipped). "
                                "Check the Inbox / their client page.")
             else:
                 st.caption("Enter a Client ID to enable backfill.")

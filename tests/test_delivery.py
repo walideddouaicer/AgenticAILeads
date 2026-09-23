@@ -216,11 +216,11 @@ def t_apply_replies():
     import common as C
     # 3 leads sharing/carrying emails via the contacts cache
     (Path(_DATA) / "enriched_contacts.json").write_text(json.dumps({
-        "Acme": [{"name": "Jane Doe", "title": "H",
+        "greenhouse:acme": [{"name": "Jane Doe", "title": "H",
                   "linkedin": "https://linkedin.com/in/j", "email": "jane@acme.com"}],
-        "Beta": [{"name": "Jo", "title": "H",
+        "greenhouse:beta": [{"name": "Jo", "title": "H",
                   "linkedin": "https://linkedin.com/in/b", "email": "jane@acme.com"}],
-        "Gamma": [{"name": "Al", "title": "H",
+        "greenhouse:gamma": [{"name": "Al", "title": "H",
                    "linkedin": "https://linkedin.com/in/a", "email": "other@x.com"}],
     }), encoding="utf-8")
     fields = ["date", "client", "platform", "company", "title", "location",

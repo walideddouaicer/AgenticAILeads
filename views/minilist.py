@@ -10,9 +10,8 @@ from minilist_engine import build_minilist, render_csv, render_table, DEFAULT_PI
 
 C.page_header("🎁 Mini-List", "minilist")
 
-st.caption("Unsolicited gift for a prospect agency: companies hiring in "
-           "THEIR niche right now, from your tracked boards. Send it with "
-           "“Want 50 more per week?” — strongest $0 sales asset you have.")
+st.caption("Job-board examples for a prospect agency. Check each row's "
+           "source and verification time before describing an opening as current.")
 
 if not C.STATE_FILE.exists():
     st.info("**No tracked jobs yet.** The mini-list is built from "
@@ -40,8 +39,7 @@ with g2:
         help="Substring match on job location; 'remote' also matches "
              "remote-flagged titles.")
     ml_n = st.slider("List size", 5, 25, 10, key="ml_n",
-                     help="10 is the sweet spot — enough to prove the "
-                          "machine, small enough to leave them wanting more.")
+                     help="Choose how many reviewed matches to show.")
 ml_pitch = st.text_input("Footer pitch line", DEFAULT_PITCH, key="ml_pitch",
                          help="The call-to-action printed at the bottom of "
                               "the branded one-pager.")
@@ -63,8 +61,8 @@ if not ml_rows:
 
 n_contact = sum(1 for r in ml_rows if r["contact_name"])
 st.caption(f"**{len(ml_rows)} companies** ({n_contact} with a "
-           "named contact). Companies with contacts and multiple "
-           "matching roles rank first.")
+           "named contact; {sum(1 for r in ml_rows if r.get('verified_at'))} "
+           "boards checked within 48 hours). Review stale rows before sending.")
 st.dataframe(
     ml_rows, width="stretch", height=340,
     column_config={

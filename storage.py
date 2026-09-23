@@ -50,7 +50,11 @@ def _pid_alive(pid: int) -> bool:
         return False
     except PermissionError:
         return True
-    except OSError:
+    except OSError as error:
+        if os.name == "nt" and getattr(error, "winerror", None) == 87:
+            # Windows reports an invalid/nonexistent PID this way rather
+            # than with ProcessLookupError.
+            return False
         # Windows and constrained runtimes can reject signal 0 for reasons
         # other than a missing process. Keeping the lock is the safe choice.
         return True

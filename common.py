@@ -344,14 +344,15 @@ def render_undo(key: str = "undo_btn"):
 
 
 def render_contact_editor(row, wkey):
-    """Add / edit / remove a manually-found contact for this lead's company.
+    """Add / edit / remove a manually-found contact for this exact board.
 
     Writes enriched_contacts.json in the exact structure the enrichment
     engine uses, so load_leads() picks the contact up on every lead of the
     company automatically. Rendered as a popover because the lead cards are
     already expanders (Streamlit forbids nesting them)."""
     company = (row.get("company") or "").strip()
-    if not company:
+    board = f"{row.get('platform', '')}:{company}".lower()
+    if not company or not row.get("platform"):
         return
     existing_name = (row.get("contact1_name") or "").strip()
     editing = bool(existing_name)
@@ -361,10 +362,10 @@ def render_contact_editor(row, wkey):
 
     label = "✏️ Edit / remove contact" if editing else "➕ Add contact manually"
     with st.popover(label,
-                    help="Contacts are stored per COMPANY in "
+                    help="Contacts are stored per board identity in "
                          "enriched_contacts.json — saving here updates "
-                         "every lead of this company."):
-        st.caption(f"Company: **{company}** — find the decision-maker on "
+                         "every lead from this board."):
+        st.caption(f"Board: **{board}** — find the decision-maker on "
                    "LinkedIn (head of talent / TA / founder) and paste "
                    "their details.")
         name = st.text_input("Name", existing_name, key=f"mc_n_{wkey}",
@@ -391,7 +392,7 @@ def render_contact_editor(row, wkey):
             if st.button("💾 Save contact", key=f"mc_s_{wkey}",
                          type="primary", width="stretch",
                          help="Saves to enriched_contacts.json; the contact "
-                              "appears on all of this company's leads."):
+                              "appears on leads from this board."):
                 errs = []
                 if not name.strip():
                     errs.append("Name is required.")
@@ -419,21 +420,21 @@ def render_contact_editor(row, wkey):
                             entries[idx] = new
                         return entries
 
-                    update_company_contacts(company, save)
-                    push_toast(f"Contact saved for {company}", "👤")
+                    update_company_contacts(board, save)
+                    push_toast(f"Contact saved for {board}", "👤")
                     st.rerun()
         with c2:
             if editing and st.button(
                     "🗑 Remove contact", key=f"mc_r_{wkey}", width="stretch",
                     help="Deletes this contact from enriched_contacts.json "
-                         "(for every lead of this company)."):
+                         "(for every lead of this board)."):
                 update_company_contacts(
-                    company,
+                    board,
                     lambda entries: [
                         c for c in entries if isinstance(c, dict)
                         and c.get("name", "").strip().lower()
                         != existing_name.lower()])
-                push_toast(f"Contact removed from {company}", "🗑")
+                push_toast(f"Contact removed from {board}", "🗑")
                 st.rerun()
 
 

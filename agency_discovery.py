@@ -43,8 +43,9 @@ from pathlib import Path
 import requests
 
 from discovery_engine import slug_variants
+from evidence import BoardResponseError, board_key
 from runtime import DATA_DIR
-from signal_engine import FETCHERS
+from signal_engine import fetch_board
 from storage import atomic_write_json, read_json, update_json
 from tls_compat import enable_os_trust_store
 
@@ -53,6 +54,8 @@ enable_os_trust_store()
 AGENCY_WATCHLIST_FILE = DATA_DIR / "agency_watchlist.json"
 STATE_FILE = DATA_DIR / "agency_discovery_state.json"
 PROSPECTS_CSV = DATA_DIR / "prospects.csv"
+MAPPINGS_FILE = DATA_DIR / "agency_board_mappings.json"
+SUGGESTIONS_FILE = DATA_DIR / "agency_board_suggestions.json"
 
 PLATFORMS = ["greenhouse", "lever", "ashby", "workable"]
 
@@ -196,7 +199,24 @@ def main():
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--retry-dead", action="store_true",
                     help="re-probe candidates cached as dead/non-agency")
+    ap.add_argument("--confirm", nargs=2, metavar=("AGENCY", "PLATFORM:TOKEN"),
+                    help="explicitly confirm a board belongs to this agency")
     args = ap.parse_args()
+
+    if args.confirm:
+        import core
+        agency, key = args.confirm
+        key = key.strip().lower()
+        if key.partition(":")[0] not in PLATFORMS or not key.partition(":")[2]:
+            ap.error("board must be platform:token")
+        agency = agency.strip().casefold()
+        if not agency:
+            ap.error("agency name cannot be empty")
+
+        existing = read_json(MAPPINGS_FILE, default={}, expected_type=dict)
+        core.set_agency_boards(agency, set(existing.get(agency, [])) | {key})
+        print(f"Confirmed {key} for {agency}")
+        return
 
     if not (args.from_prospects or args.names or args.slugs):
         ap.error("nothing to do — pass --from-prospects, --names and/or --slugs")
@@ -214,8 +234,10 @@ def main():
 
     # name -> slug candidates (plus explicit slugs verbatim)
     slugs = []
+    slug_names = {}
     for n in names:
         for s in slug_variants(n):
+            slug_names.setdefault(s, set()).add(n.strip().casefold())
             if s not in slugs:
                 slugs.append(s)
     for s in (x.strip().lower() for x in args.slugs.split(",")):
@@ -234,28 +256,27 @@ def main():
 
     fetches, found, rejected = 0, [], 0
     for i, slug in enumerate(slugs, 1):
-        if any((p, slug) in watched for p in PLATFORMS):
-            continue   # already watching this agency
-        if f"*:{slug}" in state["dead"] or f"*:{slug}" in state["not_agency"]:
-            continue
-        live_anywhere = False
         probed_all = True
         for platform in PLATFORMS:
+            key = board_key(platform, slug)
+            if ((platform, slug) in watched or key in state["dead"]
+                    or key in state["not_agency"]):
+                continue
             if fetches >= args.limit:
                 print(f"  [!] fetch limit {args.limit} reached — "
                       "re-run to continue")
                 probed_all = False
                 break
             try:
-                jobs = FETCHERS[platform](slug)
-            except requests.RequestException:
+                jobs = fetch_board(platform, slug)
+            except (requests.RequestException, BoardResponseError):
                 jobs = None
                 probed_all = False   # network blip: don't bury the slug
             fetches += 1
             time.sleep(DELAY)
             if jobs is None:
+                state["dead"][key] = today
                 continue
-            live_anywhere = True
             verdict, reason = is_probable_agency(slug, jobs)
             if verdict:
                 print(f"  [{i}/{len(slugs)}] + {platform}:{slug} "
@@ -265,13 +286,10 @@ def main():
             else:
                 print(f"  [{i}/{len(slugs)}]   {platform}:{slug} live but "
                       f"rejected — {reason}")
-                state["not_agency"][f"*:{slug}"] = today
+                state["not_agency"][key] = today
                 rejected += 1
-            break   # a slug lives on one platform; stop probing the rest
         if fetches >= args.limit and not probed_all:
             break
-        if not live_anywhere and probed_all:
-            state["dead"][f"*:{slug}"] = today
 
     print(f"\nResult: {len(found)} agency board(s), {rejected} live-but-not-"
           f"agency, {fetches} fetch(es) used.")
@@ -290,6 +308,17 @@ def main():
 
     wl = update_json(AGENCY_WATCHLIST_FILE, merge_watchlist, default={},
                      expected_type=dict, indent=2)
+    suggestions = {}
+    for platform, token in found:
+        for name in slug_names.get(token, ()):
+            suggestions.setdefault(name, []).append(board_key(platform, token))
+    if suggestions:
+        def merge_suggestions(latest):
+            for name, boards in suggestions.items():
+                latest[name] = sorted(set(latest.get(name, [])) | set(boards))
+            return latest
+        update_json(SUGGESTIONS_FILE, merge_suggestions, default={},
+                    expected_type=dict, indent=2)
     atomic_write_json(STATE_FILE, state, indent=1)
     total = sum(len(wl[p]) for p in PLATFORMS)
     print(f"agency_watchlist.json updated — {total} agency board(s) watched.")

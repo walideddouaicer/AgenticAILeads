@@ -26,6 +26,8 @@ from datetime import date
 
 import requests
 
+from evidence import (BoardResponseError, board_key, record_refreshes,
+                      utc_now, validate_snapshot)
 import sweep_core
 from runtime import DATA_DIR
 from sweep_core import (commit_sweep_batch, enable_utf8_stdout, load_history,
@@ -93,6 +95,7 @@ CSV_FILE = DATA_DIR / "signals.csv"
 # Unlike STATE_FILE this is never rebuilt from scratch; see sweep_core.
 HISTORY_FILE = DATA_DIR / "job_history.json"
 CHECKPOINT_FILE = DATA_DIR / "signal_sweep.pending.json"
+REFRESH_FILE = DATA_DIR / "board_refresh.json"
 FIELDNAMES = ["date", "client", "platform", "company", "title",
               "location", "score", "url", "hook"]
 SIGNAL_KEY_FIELDS = ["date", "client", "platform", "company", "url"]
@@ -111,6 +114,15 @@ def _get_json(url: str):
         return None
     r.raise_for_status()
     return r.json()
+
+
+def _job_rows(data, platform):
+    """Reject malformed ATS responses before an empty snapshot is inferred."""
+    rows = data if platform == "lever" else (
+        data.get("jobs") if isinstance(data, dict) else None)
+    if not isinstance(rows, list) or any(not isinstance(j, dict) for j in rows):
+        raise BoardResponseError(f"{platform}: expected a jobs list")
+    return rows
 
 
 # --- one fetcher per platform; all return {job_id: normalized_job} or None ---
@@ -153,7 +165,7 @@ def fetch_greenhouse(token):
     if data is None:
         return None
     out = {}
-    for j in data.get("jobs", []):
+    for j in _job_rows(data, "greenhouse"):
         raw = (j.get("location") or {}).get("name") or ""
         place = sweep_core.best_location(raw, _offices(j))
         _, workplace = sweep_core.split_workplace(raw)
@@ -174,7 +186,7 @@ def fetch_lever(token):
     if data is None:
         return None
     out = {}
-    for j in data:
+    for j in _job_rows(data, "lever"):
         cats = j.get("categories") or {}
         raw = cats.get("location") or ""
         # Lever carries the arrangement separately in workplaceType, and
@@ -200,7 +212,7 @@ def fetch_ashby(token):
     if data is None:
         return None
     out = {}
-    for j in data.get("jobs", []):
+    for j in _job_rows(data, "ashby"):
         raw = j.get("location") or ""
         # Ashby exposes a structured postal address and a secondary list;
         # either can name a city when `location` is generic.
@@ -229,7 +241,7 @@ def fetch_workable(token):
     if data is None:
         return None
     jobs = {}
-    for j in data.get("jobs", []):
+    for j in _job_rows(data, "workable"):
         jid = str(j.get("shortcode") or j.get("id") or j.get("url"))
         # Workable is the well-behaved one: city and country are already
         # separate fields, so this rarely needs rescuing.
@@ -256,6 +268,18 @@ FETCHERS = {
 }
 
 
+def fetch_board(platform, token):
+    """Fetch and validate one complete snapshot before any caller uses it."""
+    key = board_key(platform, token)
+    try:
+        jobs = FETCHERS[platform](token)
+    except (AttributeError, KeyError, TypeError, ValueError) as error:
+        raise BoardResponseError(f"{key}: malformed ATS response") from error
+    if jobs is None:  # 404 is a failed check, never an empty board.
+        return None
+    return validate_snapshot(jobs, key)
+
+
 def matches_keywords(title: str) -> bool:
     if not KEYWORDS:
         return True
@@ -269,8 +293,9 @@ def make_hook(new_jobs: list) -> str:
     loc = new_jobs[0]["location"]
     where = f" in {loc}" if loc else ""
     if n == 1:
-        return f"saw you just opened a {sample} role{where}"
-    return f"saw you just opened {n} new roles{where}, incl. {sample}"
+        return f"saw your board advertising a {sample} role{where}"
+    return (f"saw your board advertising {n} roles{where}, "
+            f"including {sample}")
 
 
 def load_state():
@@ -293,7 +318,7 @@ def probe_board(spec: str):
     if platform not in FETCHERS:
         sys.exit(f"unknown platform {platform!r}; "
                  f"use one of {', '.join(FETCHERS)}")
-    jobs = FETCHERS[platform](token)
+    jobs = fetch_board(platform, token)
     if jobs is None:
         sys.exit(f"board not found: {spec}")
     print(f"{spec}: {len(jobs)} job(s)\n")
@@ -336,6 +361,7 @@ def main():
     first_run = not state
     today = date.today().isoformat()
     all_signals = []
+    outcomes = {}
     total = sum(len(v) for v in WATCHLIST.values())
 
     configs = load_configs() if load_configs else []
@@ -344,20 +370,29 @@ def main():
           f"{sum(1 for v in WATCHLIST.values() if v)} platform(s) — {mode}\n")
 
     for platform, tokens in WATCHLIST.items():
-        fetch = FETCHERS[platform]
         for token in tokens:
-            key = f"{platform}:{token}"
+            key = board_key(platform, token)
             try:
-                jobs = fetch(token)
-            except requests.RequestException as e:
+                jobs = fetch_board(platform, token)
+            except (requests.RequestException, BoardResponseError) as e:
                 print(f"  [!] {key}: fetch failed ({e.__class__.__name__})")
+                outcomes[key] = {"status": "failed", "at": utc_now(),
+                                 "reason": e.__class__.__name__}
                 time.sleep(REQUEST_DELAY_SECONDS)
                 continue
             time.sleep(REQUEST_DELAY_SECONDS)
 
             if jobs is None:
                 print(f"  [!] {key}: board not found (check token)")
+                outcomes[key] = {"status": "failed", "at": utc_now(),
+                                 "reason": "not_found"}
                 continue
+
+            checked_at = utc_now()
+            jobs = {job_id: {**job, "observed_at": checked_at}
+                    for job_id, job in jobs.items()}
+            outcomes[key] = {"status": "success", "at": checked_at,
+                             "job_count": len(jobs)}
 
             known = set(state.get(key, {}))
             fresh_key = key not in state  # newly added company -> baseline it silently
@@ -403,6 +438,7 @@ def main():
     appended = commit_sweep_batch(
         CHECKPOINT_FILE, STATE_FILE, HISTORY_FILE, CSV_FILE,
         FIELDNAMES, SIGNAL_KEY_FIELDS, state, history, all_signals)
+    record_refreshes(REFRESH_FILE, outcomes)
 
     s = summarize(history, today)
     print(f"\nHistory: {s['jobs_tracked']} job(s) across {s['boards']} board(s)"

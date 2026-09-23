@@ -29,7 +29,7 @@ into booked sales meetings:
    very first run (or a newly added board) records a **baseline**
    silently — differences only become signals from the second run on.
 3. **Signal** — each newly opened role, with a ready-made **hook**
-   sentence ("saw you just opened a …"). Appended to `signals.csv`.
+   sentence about an observed board posting. Appended to `signals.csv`.
 4. **Per-client filter** (`filter_engine.py` + `configs/*.json`) — each
    signal passes through every active client profile: exclusion
    keywords, inclusion keywords, allowed locations, then scoring
@@ -167,9 +167,8 @@ Your daily working view. **Do follow-ups first, then new sends.**
   enrichment engine writes), so the contact appears on **every** lead
   of that company, in the Inbox and mini-lists too. The LinkedIn URL
   must contain `linkedin.com/`.
-- New sends are ranked: named contact first, then lead score, then
-  freshness. Hooks older than {C.FRESH_DAYS} days automatically degrade
-  from "just opened" to "currently hiring" wording.
+- New sends are ranked by the current queue logic. A present-tense hiring
+  hook requires a recent successful board check and a still-listed role.
 """)
 
 with section("inbox", "📥 Page guide — Daily Inbox"):
@@ -211,9 +210,9 @@ configs.
   across Greenhouse/Lever/Ashby/Workable and saves boards classified
   as agencies (name markers like *staffing/recruit/talent*, or an
   "agency book" posting pattern) to `agency_watchlist.json`.
-- **Mandate sweep** — diffs agency boards nightly-style; each new
-  posting = "this agency just took a mandate" = the freshest possible
-  hook ("saw you're working a {{title}} mandate…").
+- **Agency-board sweep** — records observed role advertisements. It does
+  not prove when an agency received a client mandate. Confirm the board
+  belongs to the agency before using it in a message.
 
 **Stages:** new → contacted → replied → **call booked** → **client
 won** (+ dismissed), with the same day-{C.FOLLOWUP_DAYS} /
@@ -227,10 +226,9 @@ and:
 
 - **Niche keywords** — auto-derived from the agency's mandate titles;
   edit + Save to override (persisted per prospect).
-- **🎁 One-click mini-list** — builds "10 companies hiring exactly
-  what you place" from YOUR tracked jobs using those keywords, with
-  CSV + branded HTML downloads right on the card. This is the
-  door-opener: attach it, then "want 50 more per week?".
+- **🎁 Sample** — shows the actual number of matching board/company rows,
+  source identity, verification time and named-contact coverage. Refresh
+  stale rows and review the sample before sharing it.
 """)
 
 with section("clients", "👤 Page guide — Client Pages"):
@@ -256,12 +254,12 @@ The $0 door-opener: an unsolicited gift list of companies hiring in a
 
 - **Prospect agency name** — goes in the one-pager headline.
 - **Niche keywords / market** — *their* placement niche, not yours.
-- **List size** — 10 is the sweet spot.
+- **List size** — choose the number of reviewed matches to show.
 - **Footer pitch line** — the CTA printed on the one-pager.
 - Downloads: **CSV** (raw rows) and **branded one-pager (HTML)** — open
   it and Ctrl+P → PDF for a clean attachment.
-- Companies with a named contact and multiple matching roles rank
-  first. Send with: "Want 50 more of these per week?"
+- Recent verified rows and rows with named contacts rank first. Check
+  identity and source details before sharing.
 """)
 
 with section("watchlist", "📡 Page guide — Watchlist"):
@@ -318,9 +316,9 @@ through every *active* profile.
 - **Test before you trust** — live single-job test with DM preview,
   plus a **dry run** over every tracked job showing exactly what the
   config would catch.
-- **📥 Backfill** — appends today's live matches to `signals.csv` for
-  a new client so they don't wait for future diffs; duplicates are
-  skipped, hooks use "currently hiring" wording.
+- **📥 Backfill** — appends recently verified matching postings to
+  `signals.csv` for a new client. Stale boards require a refresh first;
+  duplicates are skipped.
 """)
 
 # ------------------------------------------------------------------ (c)
@@ -329,17 +327,17 @@ with section("glossary", "📚 Glossary"):
 | Term | Meaning |
 |---|---|
 | **signal** | One newly opened role at a watched company — the reason to reach out *now*. A row in `signals.csv`. |
-| **hook** | The specific, verifiable opener a DM starts with ("saw you just opened a …"). No hook = don't send. Hooks older than {C.FRESH_DAYS} days degrade to "currently hiring" wording automatically. |
+| **hook** | A factual opener for a message. A present-tense job claim needs a recent successful board check and the role still listed. |
 | **board** | A company's public job listing on an ATS, e.g. `boards.greenhouse.io/acme`. |
 | **token** | The company's slug in the board URL (`acme`). Watchlist entries are `platform:token`. |
 | **ATS** | Applicant Tracking System. The four swept here: Greenhouse, Lever, Ashby, Workable — all with public JSON APIs. |
 | **enrichment** | Looking up the decision-maker humans (recruiting/TA leads, founders) for a signal company via Apollo.io. |
 | **baseline** | The first recorded snapshot of a board's jobs. Diffs against it produce signals; the baseline run itself never alerts. |
 | **backfill** | Seeding a new client with today's *live* matches instead of waiting for future diffs (Client Configs → dry run → Backfill). |
-| **mini-list** | The free "10 companies hiring in your niche" gift list for a prospect agency — the door-opener. |
+| **mini-list** | A reviewable sample of matching job-board postings for a prospect agency, with actual contact coverage and check times. |
 | **breakup follow-up** | Follow-up #{C.MAX_FOLLOWUPS} — the last touch ("last note from me…"). After it, the lead stops appearing in the queue. |
 | **prospect** | A recruitment agency (and its decision-maker) that WE want as a client. Lives in `prospects.csv`, worked on the Prospects page. |
-| **mandate** | A role a recruitment agency is filling for ITS client — visible as a posting on the agency's own ATS board. A new mandate = a prospect signal = our hook. |
+| **agency posting** | A role advertised on a confirmed agency board. It does not prove a newly signed client mandate. |
 """)
 
 # ------------------------------------------------------------------ (d)

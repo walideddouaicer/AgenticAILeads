@@ -2,12 +2,8 @@
 """
 Agentic AI Leads — Mini-List Generator (the $0 door-opener).
 
-Builds an unsolicited gift for a prospect agency: N companies currently
-hiring in THEIR niche, pulled from the boards you already track, with
-decision-maker contacts where enrichment has them.
-
-Send it with: "Here's 10 companies hiring in your niche right now, with
-contacts. Want 50 more per week?"
+Builds a reviewable sample of matching job-board postings for a prospect
+agency. Each row states its source, check time and contact coverage.
 
 Usage:
   python minilist_engine.py --prospect "Acme Staffing" --keywords "java, .net"
@@ -29,12 +25,15 @@ import sys
 from datetime import date
 from pathlib import Path
 
+from evidence import load_refreshes, verified_at
 from filter_engine import evaluate_job
 from runtime import DATA_DIR
 from storage import atomic_write_text, read_json
 
 STATE_FILE = DATA_DIR / "signals_state.json"
 CONTACTS_FILE = DATA_DIR / "enriched_contacts.json"
+REFRESH_FILE = DATA_DIR / "board_refresh.json"
+MAPPINGS_FILE = DATA_DIR / "company_board_mappings.json"
 OUT_DIR = DATA_DIR / "minilists"
 
 DEFAULT_N = 10
@@ -44,8 +43,8 @@ DEFAULT_EXCLUSIONS = ["intern", "internship", "unpaid", "apprentice"]
 # size gate. Keep the optional CLI override for a deliberate operator choice.
 MAX_BOARD_ROLES = 0
 HIT_CAP = 5
-DEFAULT_PITCH = ("Want 50 more of these per week — with the meetings already "
-                 "booked for you? Pay per showed meeting, first one free. "
+DEFAULT_PITCH = ("Want to review these examples together? We can discuss "
+                 "pay per attended meeting, with the first meeting free. "
                  "Just reply.")
 
 
@@ -54,13 +53,14 @@ def _load_json(path: Path, default):
 
 
 def tracked_jobs(state_file: Path = STATE_FILE):
-    """Every live job currently tracked by the signal engine."""
+    """Every job in the latest stored employer-board snapshots."""
     state = _load_json(state_file, {})
     jobs = []
     for board_key, board_jobs in state.items():
         platform, _, company = board_key.partition(":")
-        for j in board_jobs.values():
-            jobs.append({**j, "company": company, "platform": platform})
+        for job_id, j in board_jobs.items():
+            jobs.append({**j, "company": company, "platform": platform,
+                         "board_key": board_key, "job_id": str(job_id)})
     return jobs
 
 
@@ -76,13 +76,15 @@ def board_sizes(state_file: Path = STATE_FILE):
 
 def build_minilist(keywords, locations=None, exclusions=None, n=DEFAULT_N,
                    state_file=STATE_FILE, contacts_file=CONTACTS_FILE,
-                   max_board_roles=None):
+                   max_board_roles=None, refresh_file=None,
+                   mappings_file=None, now=None):
     """Match tracked jobs against a prospect's niche. One row per company
     (best-matching role as headline, count of further matches). Companies
     with a named contact and multiple matching roles rank first.
 
-    Megacap boards are excluded (see MAX_BOARD_ROLES) so the gift stays
-    credible for a boutique agency; pass max_board_roles=0 to keep them.
+    Unknown board identities stay separate. Contacts attach only through an
+    explicit board-to-company mapping. Old/failed checks remain inspectable
+    but are labeled as requiring refresh.
     """
     ceiling = (MAX_BOARD_ROLES if max_board_roles is None
                else max_board_roles)
@@ -96,6 +98,11 @@ def build_minilist(keywords, locations=None, exclusions=None, n=DEFAULT_N,
         "min_score": 0,
     }
     contacts = _load_json(contacts_file, {})
+    refresh_file = refresh_file or Path(state_file).with_name("board_refresh.json")
+    mappings_file = mappings_file or Path(state_file).with_name(
+        "company_board_mappings.json")
+    refreshes = load_refreshes(refresh_file)
+    mappings = _load_json(mappings_file, {})
     sizes = board_sizes(state_file) if ceiling else {}
 
     # An explicitly supplied but unresolved market is a review requirement,
@@ -108,12 +115,22 @@ def build_minilist(keywords, locations=None, exclusions=None, n=DEFAULT_N,
     for job in tracked_jobs(state_file):
         r = evaluate_job(job, cfg)
         if r:
-            by_company.setdefault(job["company"], []).append(r)
+            mapping = mappings.get(job["board_key"])
+            confirmed = (isinstance(mapping, dict)
+                         and isinstance(mapping.get("company"), str)
+                         and bool(mapping["company"].strip()))
+            domain = str(mapping.get("domain") or "").strip().casefold() \
+                if confirmed else ""
+            group = (("domain", domain) if domain
+                     else ("board", job["board_key"]))
+            by_company.setdefault(group, {"hits": [], "mapping": mapping
+                                          if confirmed else {}})["hits"].append(r)
 
     rows = []
-    for company, hits in by_company.items():
-        if ceiling and sizes.get(company, 0) > ceiling:
-            continue        # too big for a boutique agency to place at
+    for group, data in by_company.items():
+        hits = data["hits"]
+        if ceiling and all(sizes.get(h["company"], 0) > ceiling for h in hits):
+            continue
         # There is no meaningful "best" role. With no keyword_weights every
         # job scores 10 per matched keyword and almost every job matches
         # exactly one: measured on live data, 840 of 843 matched jobs scored
@@ -121,13 +138,33 @@ def build_minilist(keywords, locations=None, exclusions=None, n=DEFAULT_N,
         # score then picking [0] was dressing up an arbitrary pick.
         # Sort by score, then title, so at least the output is STABLE —
         # the same input gives the same list every run.
-        hits.sort(key=lambda h: (-h["lead_score"], h.get("title", "")))
+        def checked_at(hit):
+            checked = verified_at(hit["board_key"], refreshes, now)
+            return checked if checked == hit.get("observed_at") else None
+
+        hits.sort(key=lambda h: (
+            not bool(checked_at(h)),
+            -h["lead_score"], h.get("title", ""), h["board_key"]))
+        seen_roles = set()
+        distinct = []
+        for hit in hits:
+            identity = (hit.get("title", "").casefold(),
+                        hit.get("location", "").casefold())
+            if identity not in seen_roles:
+                distinct.append(hit)
+                seen_roles.add(identity)
+        hits = distinct
         best = hits[0]
-        cs = contacts.get(company) or []
+        mapping = data["mapping"]
+        company = mapping.get("company") or best["company"]
+        contact_key = ((mapping.get("contacts_key") or company)
+                       if mapping else "")
+        cs = contacts.get(best["board_key"]) or contacts.get(contact_key) or []
         c = cs[0] if cs else {}
         email = c.get("email", "") or ""
         if "@" not in email or "locked" in email.lower():
             email = ""
+        checked = checked_at(best)
         rows.append({
             "company": company,
             # An EXAMPLE of what they're hiring, not a ranked pick.
@@ -141,8 +178,16 @@ def build_minilist(keywords, locations=None, exclusions=None, n=DEFAULT_N,
             "contact_title": c.get("title", ""),
             "contact_linkedin": c.get("linkedin", ""),
             "contact_email": email,
+            "source_board": best["board_key"],
+            "source_platform": best["platform"],
+            "verified_at": checked or "",
+            "evidence_status": "current board check" if checked else "refresh required",
+            "identity_status": "confirmed" if mapping else "board identity unconfirmed",
+            "company_domain": mapping.get("domain", ""),
+            "contact_coverage": "named contact" if c.get("name") else "no named contact",
             # min(): raw len(hits) let megacaps win every niche on volume
-            "_rank": (bool(c), min(len(hits), HIT_CAP), best["lead_score"]),
+            "_rank": (bool(checked), bool(c), min(len(hits), HIT_CAP),
+                      best["lead_score"]),
         })
 
     rows.sort(key=lambda r: r["_rank"], reverse=True)
@@ -161,11 +206,16 @@ def render_table(rows, limit: int = 10) -> str:
     """
     out = []
     for r in rows[:limit]:
-        line = f"• {r['company']} — {r['hiring_now']}"
+        prefix = ("Board advertises" if r.get("verified_at")
+                  else "Previously observed; refresh required before sending")
+        line = f"• {r['company']} — {r['hiring_now']} ({prefix})"
         if r.get("more_matching_roles"):
             line += f" (+{r['more_matching_roles']} more)"
         if r.get("location"):
             line += f" — {r['location']}"
+        line += (f"\n  Source: {r.get('source_board', 'unknown')} · "
+                 f"checked: {r.get('verified_at') or 'unverified'} · "
+                 f"{r.get('identity_status', 'identity unconfirmed')}")
         if r.get("contact_name"):
             line += f"\n  → {r['contact_name']}"
             if r.get("contact_title"):
@@ -183,8 +233,20 @@ def render_csv(rows) -> str:
     w = csv.DictWriter(buf, fieldnames=list(rows[0].keys()),
                        lineterminator="\n")
     w.writeheader()
-    w.writerows(rows)
+    for row in rows:
+        # Spreadsheet apps can execute a cell beginning with these characters.
+        # Escape only the export; keep the original source data unchanged.
+        w.writerow({key: ("'" + value if isinstance(value, str)
+                          and value.lstrip().startswith(("=", "+", "-", "@"))
+                          else value)
+                    for key, value in row.items()})
     return buf.getvalue()
+
+
+def _safe_href(value):
+    value = str(value or "").strip()
+    return html.escape(value, quote=True) if value.startswith(
+        ("https://", "http://")) else ""
 
 
 def render_html(prospect: str, rows, pitch: str = DEFAULT_PITCH) -> str:
@@ -202,23 +264,28 @@ def render_html(prospect: str, rows, pitch: str = DEFAULT_PITCH) -> str:
             contact = f'<strong>{e(r["contact_name"])}</strong>'
             if r["contact_title"]:
                 contact += f'<br><span class="sub">{e(r["contact_title"])}</span>'
-            if r["contact_linkedin"]:
-                contact += (f'<br><a href="{e(r["contact_linkedin"])}">'
+            contact_href = _safe_href(r["contact_linkedin"])
+            if contact_href:
+                contact += (f'<br><a href="{contact_href}">'
                             'LinkedIn &#8599;</a>')
             if r["contact_email"]:
                 contact += f'<br><span class="sub">{e(r["contact_email"])}</span>'
-        link = (f'<a href="{e(r["job_url"])}">posting &#8599;</a>'
-                if r["job_url"] else "")
+        job_href = _safe_href(r["job_url"])
+        link = (f'<a href="{job_href}">posting &#8599;</a>'
+                if job_href else "")
+        evidence = (f'{e(r.get("source_board", "unknown"))}<br>'
+                    f'<span class="sub">{e(r.get("verified_at") or "refresh required")}'
+                    f' · {e(r.get("identity_status", "unconfirmed"))}</span>')
         trs.append(
             f'<tr><td class="n">{i:02d}</td>'
             f'<td class="co">{e(r["company"])}</td>'
             f'<td>{role}<br><span class="sub">{e(r["location"])}</span></td>'
-            f'<td>{contact}</td><td>{link}</td></tr>')
+            f'<td>{contact}</td><td>{link}<br>{evidence}</td></tr>')
 
     return f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{len(rows)} companies hiring in your niche — for {e(prospect)}</title>
+<title>{len(rows)} job-board examples — for {e(prospect)}</title>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Space+Mono&display=swap" rel="stylesheet">
 <style>
   :root {{ --lime: #D8FF3E; --ink: #111; }}
@@ -251,17 +318,17 @@ def render_html(prospect: str, rows, pitch: str = DEFAULT_PITCH) -> str:
   @media print {{ body {{ padding: 20px; }} }}
 </style></head><body>
   <span class="tag">Agentic AI Leads · free intel</span>
-  <h1>{len(rows)} companies hiring in your niche — right now.</h1>
-  <div class="meta">Prepared for {e(prospect)} · {today} · live job-board
-  signals, verified today</div>
+  <h1>{len(rows)} matching job-board examples.</h1>
+  <div class="meta">Prepared for {e(prospect)} · {today} · check each source's
+  verification time before describing it as current</div>
   <table>
-    <thead><tr><th></th><th>Company</th><th>Hiring now</th>
-    <th>Who to talk to</th><th>Proof</th></tr></thead>
+    <thead><tr><th></th><th>Board/company</th><th>Observed role</th>
+    <th>Contact found</th><th>Source and check</th></tr></thead>
     <tbody>{''.join(trs)}</tbody>
   </table>
   <div class="pitch"><b>{e(pitch)}</b></div>
-  <div class="foot">Agentic AI Leads — signal-based meetings for recruitment
-  agencies. No retainer, no contract, pay per showed meeting.</div>
+  <div class="foot">Agentic AI Leads — job-board examples for review.
+  Contact availability is shown per row.</div>
 </body></html>"""
 
 
