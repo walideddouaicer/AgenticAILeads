@@ -51,8 +51,15 @@ def main():
                 widget.set_value("Java")
             elif widget.label == "Allowed locations":
                 widget.set_value("London")
+        [button for button in at.button
+         if button.label == "Save client profile"][0].click()
+        at.run()
+        assert any("agreed rate" in str(item.value) for item in at.error), \
+            "a new client must not save an assumed meeting rate"
+        assert not (data / "configs" / "first_client.json").exists()
         for widget in at.number_input:
             if widget.label == "Agreed rate per attended, chargeable meeting ($)":
+                assert widget.value is None, widget.value
                 widget.set_value(175)
         [button for button in at.button
          if button.label == "Save client profile"][0].click()

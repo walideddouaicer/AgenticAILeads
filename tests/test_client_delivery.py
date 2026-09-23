@@ -78,6 +78,29 @@ class ClientDeliveryChecks(unittest.TestCase):
                                     refresh_file=refresh, csv_file=signals,
                                     config_dir=configs, now=now)
 
+    def test_won_agency_prefill_needs_explicit_rate(self):
+        prospects = [
+            {"agency": "Atlas Search", "person_name": "Alex Smith",
+             "linkedin": "https://www.linkedin.com/in/alex",
+             "location": "London", "niche_keywords": "java, data engineer"},
+            {"agency": "Beacon Talent", "person_name": "Bo Lee",
+             "linkedin": "https://www.linkedin.com/in/bo", "location": "Paris",
+             "niche_keywords": "python"}]
+        status = {core.prospect_key(prospects[0]): {"status": "client_won",
+                                                     "niche": "java"},
+                  core.prospect_key(prospects[1]): {"status": "call_booked"}}
+        won = D.won_agencies(prospects, status)
+        self.assertEqual(won, {"Atlas Search": {
+            "client_id": "atlas-search", "label": "Atlas Search",
+            "inclusion_keywords": ["java"], "allowed_locations": ["London"]}})
+        self.assertNotIn("meeting_rate", won["Atlas Search"])
+        self.assertEqual(D.won_agencies(prospects, status, ["atlas-search"]), {})
+        with tempfile.TemporaryDirectory() as folder:
+            with self.assertRaises(ValueError):
+                D.save_profile({**won["Atlas Search"], "meeting_rate": None},
+                               config_dir=folder)
+            self.assertFalse(any(Path(folder).iterdir()))
+
     def test_manual_send_exact_message_and_duplicate_action(self):
         with tempfile.TemporaryDirectory() as folder:
             status_file = Path(folder) / "inbox_status.json"

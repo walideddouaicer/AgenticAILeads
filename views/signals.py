@@ -361,7 +361,7 @@ with tab_jobs:
             "the location column and an empty `workplace`.** Those rows "
             "were captured before the fetchers learned to tell a place from "
             "a working arrangement — the data on disk is stale, the table "
-            "is fine. **Run the sweep** (Run engines, above) and they'll "
+            "is fine. **Refresh employer boards** above and they'll "
             "show a real city.")
 
     st.caption(f"{len(rows):,} stored roles across {len(counts)} board(s); "
@@ -377,8 +377,8 @@ with tab_jobs:
     with f2:
         min_days = int(st.number_input(
             "Open ≥ days", 0, 365, 0, key="sig_min_days",
-            help="14+ is where in-house recruiting is visibly struggling — "
-                 "the Warm Req idea. Needs history depth to be useful."))
+            help="Roles open 14+ days may be harder for the employer to "
+                 "fill. Needs history depth to be useful."))
     with f3:
         oldest = st.toggle("Longest open first", key="sig_job_sort")
 

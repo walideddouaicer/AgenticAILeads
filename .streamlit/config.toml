@@ -26,3 +26,7 @@ runOnSave = true
 address = "127.0.0.1"
 enableCORS = true
 enableXsrfProtection = true
+
+[client]
+# Hide Streamlit's developer "Deploy" menu; the app is started with start.py.
+toolbarMode = "minimal"

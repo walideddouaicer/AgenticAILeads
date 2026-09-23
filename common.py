@@ -363,7 +363,8 @@ def render_contact_editor(row, wkey):
 
 def set_stage(status, key, stage, notes=None, lead_label: str = "", path=None):
     """UI wrapper over core.apply_stage: adds the undo snapshot and toast."""
-    _snapshot_undo(status, key, f"{lead_label or 'lead'} → {stage}", path)
+    _snapshot_undo(status, key,
+                   f"{lead_label or 'lead'} → {stage.replace('_', ' ')}", path)
     apply_stage(status, key, stage, notes, path)
     st.session_state["_undo"]["expected"] = status_revision(status, key)
     icons = {"contacted": "✅", "replied": "💬", "won": "🏆", "dismissed": "🚫",

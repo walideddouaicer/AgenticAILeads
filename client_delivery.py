@@ -36,6 +36,30 @@ def client_ids(leads, profiles=None):
                       if row.get("client") not in ("", "default")}))
 
 
+def won_agencies(prospects, prospect_status, existing_ids=()):
+    """Prefill candidates for agencies marked client won in Prospects.
+
+    Only facts already recorded for the agency are offered; the operator
+    reviews roles and market and enters the agreed rate before saving.
+    """
+    taken = {str(client).casefold() for client in existing_ids}
+    out = {}
+    for row in prospects:
+        entry = prospect_status.get(core.prospect_key(row)) or {}
+        agency = (row.get("agency") or "").strip()
+        if core.effective_status(entry) != "client_won" or not agency:
+            continue
+        client_id = re.sub(r"[^a-z0-9]+", "-", agency.casefold()).strip("-")
+        if not client_id or client_id in taken or agency in out:
+            continue
+        niche = (entry.get("niche") or row.get("niche_keywords") or "")
+        out[agency] = {"client_id": client_id, "label": agency,
+                       "inclusion_keywords": core.parse_csv_line(niche),
+                       "allowed_locations": core.parse_csv_line(
+                           row.get("location", ""))}
+    return out
+
+
 def validate_client_id(client_id):
     if not re.fullmatch(r"[A-Za-z0-9_-]+", str(client_id or "")):
         raise ValueError("Client ID needs letters, numbers, hyphens or underscores")
@@ -49,7 +73,9 @@ def save_profile(config, *, expected=UNSET, config_dir=None):
     path = Path(config_dir or core.CONFIG_DIR) / f"{client_id}.json"
     cleaned = copy.deepcopy(config)
     cleaned["client_id"] = client_id
-    if int(cleaned.get("meeting_rate", 0)) < 0:
+    if cleaned.get("meeting_rate") is None:
+        raise ValueError("Enter the agreed meeting rate (0 if not charged)")
+    if int(cleaned["meeting_rate"]) < 0:
         raise ValueError("Meeting rate cannot be negative")
 
     def apply(current):

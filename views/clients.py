@@ -34,14 +34,25 @@ if view == "Profile & matches":
     st.subheader("Client profile")
     st.caption("Save this form before changing screens. A client ID identifies "
                "their leads and cannot be changed after creation.")
+    saved_rate = raw_config.get("meeting_rate")
     if client == "Create client":
         st.info("Create a real client profile to match employers. The "
                 "app's `default` filter is reserved for its own prospecting.")
-        config = {**DEFAULTS, "client_id": "", "meeting_rate":
-                  core.DEFAULT_MEETING_RATE, "channel": "linkedin",
+        config = {**DEFAULTS, "client_id": "", "channel": "linkedin",
                   "dm_template": core.DEFAULT_TEMPLATE,
                   "followup_template": core.DEFAULT_FOLLOWUP_TEMPLATE,
                   "followup2_template": core.DEFAULT_FOLLOWUP2_TEMPLATE}
+        won = D.won_agencies(core.load_prospects(),
+                             core.load_status(core.PROSPECTS_STATUS), ids)
+        if won:
+            start_from = st.selectbox(
+                "Start from a won agency", ["Blank profile"] + list(won),
+                key="client_start_from",
+                help="Prefills the name, stated niche and market from Prospects.")
+            if start_from != "Blank profile":
+                config.update(won[start_from])
+                st.caption("Prefilled from Prospects. Check the target roles, "
+                           "market and agreed rate before saving.")
     with st.form("client_profile"):
         c1, c2 = st.columns(2)
         with c1:
@@ -59,7 +70,10 @@ if view == "Profile & matches":
                                       ", ".join(config.get("exclusion_keywords") or []))
             rate = st.number_input("Agreed rate per attended, chargeable meeting ($)",
                                    min_value=0,
-                                   value=int(config.get("meeting_rate") or 0))
+                                   value=(int(saved_rate) if saved_rate is not None
+                                          else None),
+                                   placeholder="Enter the agreed rate",
+                                   help="Enter 0 if meetings are not charged.")
             channel = st.selectbox("Outreach channel", core.CHANNELS,
                                    index=core.CHANNELS.index(
                                        config.get("channel", "linkedin"))
@@ -82,13 +96,17 @@ if view == "Profile & matches":
                   "inclusion_keywords": core.parse_csv_line(niches),
                   "allowed_locations": core.parse_csv_line(locations),
                   "exclusion_keywords": core.parse_csv_line(exclusions),
-                  "meeting_rate": int(rate), "channel": channel,
+                  "meeting_rate": None if rate is None else int(rate),
+                  "channel": channel,
                   "active": active, "dm_template": dm_template,
                   "followup_template": followup_template,
                   "followup2_template": followup2_template}
         if not edited["inclusion_keywords"]:
             st.error("Add at least one niche keyword so the client does not "
                      "match every job.")
+        elif edited["meeting_rate"] is None:
+            st.error("Enter the agreed rate per chargeable meeting (0 if "
+                     "meetings are not charged).")
         else:
             try:
                 D.save_profile(edited, expected=revision(raw_config or None))
@@ -267,8 +285,10 @@ if view == "Outreach":
             if stage != "dismissed":
                 choices = [item for item in ("contacted", "replied", "won",
                                              "dismissed") if item != stage]
-                outcome = st.selectbox("Update outcome", choices,
-                                       key=f"client_outcome_{key}")
+                outcome = st.selectbox(
+                    "Update outcome", choices, key=f"client_outcome_{key}",
+                    format_func=lambda item: ("won (meeting attended)"
+                                              if item == "won" else item))
                 if st.button("Save outcome", key=f"client_outcome_save_{key}"):
                     C.set_stage(status, key, outcome, notes,
                                 lead_label=row.get("company", ""))

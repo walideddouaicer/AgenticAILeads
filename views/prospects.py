@@ -215,7 +215,7 @@ def prospect_card(k, p, kind, i, *, allow_send=True):
     icon = {"fu": "🔁 ", "new": "🆕 ", "play": "💬 "}[kind]
     head = (f"{icon}{person} — {p.get('person_title', '?')}  [{agency}]"
             + ("  · 🎣 board posting" if hook_src == "board posting" else ""))
-    with st.expander(head, expanded=(i == 0 and kind != "play")):
+    with st.expander(head, expanded=(i == 0)):
         st.markdown(C.stage_badge(eff, due), unsafe_allow_html=True)
         meta = " · ".join(x for x in [
             p.get("location", ""),
@@ -477,6 +477,10 @@ def prospect_card(k, p, kind, i, *, allow_send=True):
                                 path=core.PROSPECTS_STATUS)
                     st.rerun()
         else:  # play: replied -> call_booked -> client_won
+            if eff == "client_won":
+                st.success("Client won. Next: open Clients, choose Create "
+                           "client and start from this agency, then review "
+                           "and save its profile.")
             with b1:
                 if eff == "replied" and st.button(
                         "📅 Call booked", key=f"pcb_{k}", type="primary",
