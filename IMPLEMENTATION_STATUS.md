@@ -25,7 +25,7 @@ Updated: 23 September 2026. Scope: Phases 0–7 through portable operation and r
 - Phase 6 cleanup checkpoint: `Remove superseded paths and align operator guide gbt 13.0`.
   Hash: `ec6e950`.
 - Phase 7 operation/recovery checkpoint: `Add portable startup refresh and recovery gbt 14.0`.
-  Hash is reported with the commit. Next suffix: `gbt 15.0`.
+  Hash: `7209ee3`.
 
 | Phase | Status |
 |---|---|
@@ -36,7 +36,7 @@ Updated: 23 September 2026. Scope: Phases 0–7 through portable operation and r
 | 4 — interface consolidation | Implemented offline at `gbt 11.0` |
 | 5 — minimum client delivery | Implemented offline at `gbt 12.0` |
 | 6 — dead paths and documentation | Implemented offline at `gbt 13.0` |
-| 7 — Linux operation and recovery | Implemented and exercised on Ubuntu Python 3.12.3; target 3.13.15 and Docker run still unverified |
+| 7 — Linux operation and recovery | Implemented and exercised on Ubuntu Python 3.12.3 and 3.13.15; Docker run still unverified |
 | 8 — release rehearsal | Not started |
 
 ## Starting inventory
@@ -56,7 +56,8 @@ or fabricated. No user data migration occurred.
 Linux x86_64, Python 3.13.15, isolated `.venv`. Direct packages:
 Streamlit 1.64.0, requests 2.34.2, truststore 0.10.4. `requirements.txt` records the
 exact installed direct/transitive versions; `pip check` reported no broken
-requirements. Other Python versions/platforms have not been verified.
+requirements. Later Phase 7 checks also passed on Ubuntu Python 3.12.3 and
+Windows Python 3.12.14.
 
 ## Original baseline results
 
@@ -362,9 +363,12 @@ The Ubuntu run started the actual local server, received a healthy response,
 stopped and restarted against the same data directory, and retained saved
 status. Fixture refresh, two-session visibility, missing-credential guidance,
 seed non-overwrite, and backup/restore integrity checks passed. `pip check`
-passed on Windows and Ubuntu; container entrypoint shell syntax passed. Ubuntu
-did not have Python 3.13.15 and Docker had no daemon, so the documented Python
-version and an actual container run were not reverified in this phase.
+passed on Windows and Ubuntu; container entrypoint shell syntax passed. A
+separate Ubuntu Python 3.13.15 environment installed all 37 pinned packages,
+passed a dependency compatibility check, and passed the full isolated offline
+suite, including actual loopback server startup, health response, stop, restart
+and retained status. Docker had no daemon, so an actual container run remains
+unverified.
 No live provider call, outreach, push, deployment or schedule occurred.
 
 ## Next phase
