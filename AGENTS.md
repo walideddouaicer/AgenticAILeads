@@ -67,3 +67,8 @@ asking the user. Stop at a phase checkpoint when the user requested that phase.
 The README is the current operator guide. The only supported pages are
 Prospects, Clients, Signals and Settings. Legacy page, email-sequence send and
 reply-sync paths are removed; preserve the manual workflow and data readers.
+For new installs, `start.py` and `refresh.py` choose project-local `data/`
+unless `AAL_DATA_DIR` is set. Keep the legacy root-file default readable for
+existing direct script users. `bootstrap.py` seeds defaults only into an empty
+directory; `recovery.py` restores into a new directory and never activates it.
+Do not add scheduled jobs or deploy the optional container without instruction.

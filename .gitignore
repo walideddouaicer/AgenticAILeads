@@ -1,5 +1,8 @@
 # Secrets — never commit API keys
 .env
+.env.*
+!.env.example
+data/
 
 # Python
 __pycache__/
@@ -29,6 +32,20 @@ prospect_signals.csv
 prospect_signals_state.json
 agency_discovery_state.json
 prospector_probe.json
+board_refresh.json
+agency_board_refresh.json
+company_board_mappings.json
+agency_board_mappings.json
+agency_board_suggestions.json
+company_domains.json
+contact_lookup_status.json
+client_meetings.json
+prospect_key_aliases.json
+prospect_identity_pending.json
+run_status.json
+minilists/
+configs/*.json
+!configs/default.json
 
 # Job history — gitignored because it changes every sweep and would bloat
 # the repo, BUT it is the one runtime file that CANNOT be regenerated.

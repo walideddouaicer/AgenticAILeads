@@ -16,15 +16,15 @@ On Windows, create the environment with `py -3.13 -m venv .venv`, then use `.ven
 
 ## Configure and start
 
-Set `APP_USERNAME` and `APP_PASSWORD` in the process environment, or `APP_USERS` for two logins. Keep credentials out of Git. Optional `AAL_DATA_DIR` points all app and engine data at one shared directory; by default it is the project directory. Optional `AAL_ENV_FILE` points to an environment file with an Apollo key for prospect or contact lookup. No provider key is needed for CSV imports, manual contact entry, or manual outreach.
+Set `APP_USERNAME` and `APP_PASSWORD` in the process environment, or `APP_USERS` for two logins. Keep credentials out of Git. The launcher defaults to the project-local `data/` folder and seeds both separate board lists plus the default profile only when that folder is empty. Set `AAL_DATA_DIR` to an absolute path to use existing data elsewhere, including an older installation with data in the repository root. Optional `AAL_ENV_FILE` points to an environment file with an Apollo key for prospect or contact lookup. No provider key is needed for CSV imports, manual contact entry, or manual outreach.
 
 ```sh
 export APP_USERNAME=operator
 export APP_PASSWORD='choose-a-private-password'
-.venv/bin/python -m streamlit run app.py --server.address 127.0.0.1
+.venv/bin/python start.py
 ```
 
-Open the local URL printed by Streamlit and sign in. The Windows equivalent is to set the two variables with `$env:APP_USERNAME` and `$env:APP_PASSWORD` in PowerShell, then run `.venv\Scripts\python.exe -m streamlit run app.py --server.address 127.0.0.1`.
+Open the local URL printed by Streamlit and sign in. The Windows equivalent is to set the two variables with `$env:APP_USERNAME` and `$env:APP_PASSWORD` in PowerShell, then run `.venv\Scripts\python.exe start.py` or `start_app.bat`. The default address is `127.0.0.1`. For shared access, configure login credentials and explicitly pass `--host 0.0.0.0` on a trusted network; use HTTPS at the external access layer. `start.py --check` validates credentials and local data setup without starting a server. The optional Docker image uses the same startup path and requires a persistent volume at `/data`; CORS and XSRF protection stay enabled.
 
 ## Acquire an agency client
 
@@ -44,12 +44,19 @@ The app does not send messages, enroll people in email sequences, or sync replie
 
 The first meeting defaults to free. The recorded estimate uses the saved client rate for chargeable attended meetings; it is not an invoice or a payment record. Apollo contact enrichment is optional and only runs when an operator chooses it.
 
-Useful headless commands (run from the project directory) are `signal_engine.py --baseline` for the first employer sweep, `prospect_signal_engine.py --baseline` for the first agency sweep, `build_today.py --dry-run` for the current acquisition queue, and `enrichment_engine.py --list-companies` to inspect lookup candidates without making provider calls. Each supports `--help`. The app also has buttons for the supported refresh tasks. A first sweep establishes a baseline; it does not claim old postings are newly opened.
+Useful headless commands (run from the project directory) are `.venv/bin/python refresh.py nightly --dry-run` to inspect the portable refresh chain, `.venv/bin/python refresh.py nightly` to run it, and `.venv/bin/python refresh.py weekly` to grow board coverage. These use the same data directory and runner lock as the app. They are manual commands; no cron, systemd task, or Windows schedule is installed. For individual work, `signal_engine.py --baseline` and `prospect_signal_engine.py --baseline` establish first-sweep baselines; `build_today.py --dry-run` previews the acquisition queue, and `enrichment_engine.py --list-companies` previews lookup candidates without provider calls. Run individual scripts with `AAL_DATA_DIR` set to the same directory as the app. A first sweep does not claim old postings are newly opened.
 
 ## Back up and recover
 
-Keep the app's data directory on persistent storage. The runner's refresh chain saves existing job and mandate histories under `backups/` before it runs. **Settings** shows these backups and can restore a selected history after confirmation. The restore saves the current history as a pre-restore backup. A damaged JSON file is reported rather than silently replaced.
+Keep the app's data directory on persistent storage. The refresh chain saves existing job and mandate histories under `backups/` before it runs. **Settings** can restore one of those histories after confirmation, preserving the current copy. A damaged JSON file is reported rather than silently replaced.
 
-For a full manual backup, stop writers and copy the entire data directory, including profiles, mappings, contact corrections, statuses, meetings, and both histories, to a private location. Keep `.env` and login credentials out of shareable archives. Before restoring, make a separate copy of the current directory, inspect the backup, and deliberately replace the intended files while the app and engines are stopped. A complete automated backup/restore round trip and portable Linux scheduling are Phase 7 work.
+For a complete operational backup, stop the app and refresh processes, then run:
+
+```sh
+.venv/bin/python recovery.py backup
+.venv/bin/python recovery.py restore data/backups/operational-YYYYMMDDTHHMMSSZ.zip restored-data
+```
+
+Use the actual archive name printed by the backup command. The archive includes profiles, mappings, contact corrections, statuses, client meetings, sweep checkpoints, and both histories. It excludes `.env`, provider probes and old archives; it still contains private prospect and client data, so keep it private. Restore validates file contents and checksums into a **new** directory and never switches the running app to it. After inspecting the restored directory, stop the app and deliberately set `AAL_DATA_DIR` to its absolute path before restarting. Keep a separate copy of the previous data directory until recovery is confirmed. If you keep extra files outside the supported operational set, copy those privately as well.
 
 Current engineering checkpoints and remaining release gates are in [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) and [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md). Older strategy and deployment notes are historical and do not describe the supported interface.

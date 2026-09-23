@@ -5,7 +5,7 @@ set PYTHONUTF8=1
 set PYTHONIOENCODING=utf-8
 
 echo ==== weekly %date% %time% ==== >> sweep.log
-python runner.py chain weekly >> sweep.log 2>&1
+"%~dp0.venv\Scripts\python.exe" refresh.py weekly >> sweep.log 2>&1
 set RESULT=%errorlevel%
 echo ==== weekly done %date% %time% (exit %RESULT%) ==== >> sweep.log
 exit /b %RESULT%

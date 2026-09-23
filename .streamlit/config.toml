@@ -23,3 +23,6 @@ borderColor = "#3D3D3D"
 
 [server]
 runOnSave = true
+address = "127.0.0.1"
+enableCORS = true
+enableXsrfProtection = true

@@ -88,6 +88,14 @@ if not INTERACT:
         imported = list(csv.DictReader(stream))
     check("manual prospect entry persists without a CLI",
           len(imported) == 1 and imported[0]["agency"] == "Fixture Recruiting")
+    second_session = fresh("views/prospects.py")
+    [widget for widget in second_session.segmented_control
+     if widget.key == "prospect_view"][0].set_value("All")
+    second_session.run()
+    check("second session sees the saved prospect",
+          not second_session.exception and any(
+              "Fixture Recruiting" in str(item.value)
+              for item in second_session.dataframe))
 
 if INTERACT:
     print("  -- interactions --")

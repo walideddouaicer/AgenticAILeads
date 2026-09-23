@@ -1,6 +1,5 @@
 # Keep the image small and never bake local runtime data into it.
-# NOTE: watchlist.json and configs/ are intentionally NOT ignored — the
-# entrypoint seeds them onto the persistent volume on first boot.
+# The two tracked watchlists and configs/default.json seed only an empty volume.
 .git
 .gitignore
 .venv
@@ -10,7 +9,12 @@ __pycache__
 .pytest_cache
 .streamlit/secrets.toml
 .env
+.env.*
 .engine.lock
+data/
+backups/
+.claude/
+AGENTS.local-before-pull.md
 
 # Runtime data files (regenerated on the volume; not needed in the image)
 signals.csv
@@ -30,6 +34,26 @@ agency_watchlist.json
 agency_discovery_state.json
 prospector_probe.json
 minilists/
+job_history.json
+mandate_history.json
+board_refresh.json
+agency_board_refresh.json
+company_board_mappings.json
+agency_board_mappings.json
+agency_board_suggestions.json
+contact_lookup_status.json
+company_domains.json
+client_meetings.json
+prospect_key_aliases.json
+prospect_identity_pending.json
+run_status.json
+today.json
+icp.json
+*.pending.json
+*_probe.json
+configs/*
+!configs/default.json
+!agency_watchlist.json
 
 # Docs/build artifacts not needed at runtime
 DEPLOY.pdf

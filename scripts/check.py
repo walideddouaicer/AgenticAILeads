@@ -55,6 +55,12 @@ def main():
             target = root / source.relative_to(ROOT)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
+        for name in ("watchlist.json", "agency_watchlist.json",
+                     "configs/default.json"):
+            source = ROOT / name
+            target = root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
         guard = root / "_offline"
         guard.mkdir()
         (guard / "sitecustomize.py").write_text(GUARD, encoding="utf-8")
@@ -83,6 +89,7 @@ def main():
                     ("units", ["tests/test_units.py"]),
                     ("storage", ["tests/test_storage.py"]),
                     ("runner", ["tests/test_runner.py"]),
+                    ("operations", ["tests/test_operations.py"]),
                     ("sweep-commit", ["tests/test_sweep_commit.py"]),
                     ("engine-storage", ["tests/test_engine_storage.py"]),
                     ("matching", ["tests/test_matching.py"]),

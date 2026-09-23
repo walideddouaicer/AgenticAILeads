@@ -1,6 +1,6 @@
 # Implementation status
 
-Updated: 23 September 2026. Scope: Phases 0–6 through dead-path cleanup.
+Updated: 23 September 2026. Scope: Phases 0–7 through portable operation and recovery.
 
 ## Checkpoints
 
@@ -23,7 +23,9 @@ Updated: 23 September 2026. Scope: Phases 0–6 through dead-path cleanup.
 - Phase 5 client-delivery checkpoint: `Complete first-client delivery and meeting records gbt 12.0`.
   Hash: `e832abf`.
 - Phase 6 cleanup checkpoint: `Remove superseded paths and align operator guide gbt 13.0`.
-  Hash is reported with the commit. Next suffix: `gbt 14.0`.
+  Hash: `ec6e950`.
+- Phase 7 operation/recovery checkpoint: `Add portable startup refresh and recovery gbt 14.0`.
+  Hash is reported with the commit. Next suffix: `gbt 15.0`.
 
 | Phase | Status |
 |---|---|
@@ -34,7 +36,7 @@ Updated: 23 September 2026. Scope: Phases 0–6 through dead-path cleanup.
 | 4 — interface consolidation | Implemented offline at `gbt 11.0` |
 | 5 — minimum client delivery | Implemented offline at `gbt 12.0` |
 | 6 — dead paths and documentation | Implemented offline at `gbt 13.0` |
-| 7 — Linux operation and recovery | Not started |
+| 7 — Linux operation and recovery | Implemented and exercised on Ubuntu Python 3.12.3; target 3.13.15 and Docker run still unverified |
 | 8 — release rehearsal | Not started |
 
 ## Starting inventory
@@ -335,7 +337,36 @@ external outreach, push, deployment or scheduling occurred in this phase.
 Full backup/restore and Linux installation remain Phase 7 work; founder
 acceptance remains Phase 8 work.
 
+## Phase 7 result
+
+- Added project-local `start.py` and `refresh.py`. New installations use an
+  ignored `data/` directory by default; `AAL_DATA_DIR` selects an existing
+  installation. Both employer and agency watchlists and the default profile
+  seed only when the entire directory is empty. Existing files are untouched.
+- Local startup binds to `127.0.0.1`, requires login configuration and keeps
+  CORS/XSRF protection enabled. Shared binding is explicit. The optional
+  container uses the same startup path, no longer disables those protections,
+  and excludes runtime data from its build context. Windows wrappers use the
+  project environment and no longer contain the old machine path. No scheduler
+  or deployment was created.
+- `recovery.py` archives the known operational CSV/JSON state, profiles,
+  mappings, corrections, meetings, both histories and sweep checkpoints.
+  Credential files, probes and prior archives are excluded. Restore verifies
+  checksums and JSON/CSV content into a new directory, refusing an existing
+  target. Activation remains a deliberate operator action. The README and
+  optional container guide now describe this procedure.
+
+Verification: isolated offline suite passed on Windows Python 3.12.14 and in
+a clean Ubuntu Python 3.12.3 virtual environment with pinned dependencies.
+The Ubuntu run started the actual local server, received a healthy response,
+stopped and restarted against the same data directory, and retained saved
+status. Fixture refresh, two-session visibility, missing-credential guidance,
+seed non-overwrite, and backup/restore integrity checks passed. `pip check`
+passed on Windows and Ubuntu; container entrypoint shell syntax passed. Ubuntu
+did not have Python 3.13.15 and Docker had no daemon, so the documented Python
+version and an actual container run were not reverified in this phase.
+No live provider call, outreach, push, deployment or schedule occurred.
+
 ## Next phase
 
-Phase 7: portable Linux setup, secure local/shared startup and complete
-operational backup/restore, with no scheduling or deployment performed here.
+Phase 8: integrated release rehearsal and founder acceptance walkthrough.

@@ -2,8 +2,8 @@
 #
 # The app stores its data as files under AAL_DATA_DIR. In production that
 # points at /data, which Coolify mounts as a PERSISTENT VOLUME so data
-# survives redeploys. The entrypoint seeds /data from the repo's committed
-# defaults (watchlist.json, configs/) on first boot.
+# survives redeploys. The entrypoint seeds the separate board lists and
+# default profile only on an entirely empty first boot.
 FROM python:3.13-slim
 
 # Faster, cleaner Python in containers.
