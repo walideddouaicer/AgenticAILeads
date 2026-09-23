@@ -507,6 +507,11 @@ ENGINES = {
         "script": "signal_engine.py",
         "icon": "🛰",
     },
+    "agency_sweep": {
+        "label": "Agency board refresh",
+        "script": "prospect_signal_engine.py",
+        "icon": "📌",
+    },
     "enrich": {
         "label": "Enrichment (enrichment_engine.py)",
         "script": "enrichment_engine.py",
@@ -609,9 +614,12 @@ def render_engine_panel():
             j = st.session_state.get("_engine_job")
             if j is None:
                 return
-            with st.status(f"Running: {j.label}…", expanded=True,
+            with st.status(f"Running: {j.label}…", expanded=False,
                            state="running"):
-                st.code("\n".join(j.lines[-40:]) or "starting…", language=None)
+                st.caption("The source is being checked. Results will appear "
+                           "when the run finishes.")
+                with st.expander("Technical log"):
+                    st.code("\n".join(j.lines[-40:]) or "starting…", language=None)
             if j.done:
                 st.rerun(scope="app")
         _live()
@@ -621,7 +629,13 @@ def render_engine_panel():
     head = (f"{job.label} — finished OK" if ok
             else f"{job.label} — FAILED (exit code {job.rc})")
     with st.status(head, expanded=not ok, state="complete" if ok else "error"):
-        st.code("\n".join(job.lines) or "(no output)", language=None)
+        if ok:
+            st.caption("Reload this page to inspect the updated results.")
+        else:
+            st.error("The refresh did not finish. Review the technical log, "
+                     "then retry after correcting the cause.")
+        with st.expander("Technical log"):
+            st.code("\n".join(job.lines) or "(no output)", language=None)
     c1, c2 = st.columns([1, 3])
     with c1:
         if st.button("Dismiss output", key="engine_dismiss",
@@ -651,19 +665,20 @@ def engine_button(name: str, key: str, extra_args=None, label=None,
 # ============================ chrome (sidebar / headers) ============================
 
 def compute_stats():
-    """The four always-on sidebar numbers."""
-    leads, _ = load_leads()
-    status = load_status()
-    wl = load_watchlist()
-    today = date.today().isoformat()
-    n_due = sum(1 for r in leads if followup_due(status.get(lead_key(r))))
-    n_new = sum(1 for r in leads
-                if effective_status(status.get(lead_key(r))) == "new")
-    touched = sum(1 for e in status.values()
-                  if e.get("on") == today
-                  and e.get("status") in ("contacted", "replied", "won"))
-    boards = sum(len(v) for v in wl.values())
-    return {"due": n_due, "new": n_new, "touched": touched, "boards": boards}
+    """Acquisition counts for the sidebar; eligibility remains in outreach."""
+    from outreach import initial_sends_today, local_now
+
+    prospects = load_prospects()
+    status = load_status(PROSPECTS_STATUS)
+    now = local_now()
+    keys = {prospect_key(row) for row in prospects}
+    return {
+        "prospects": len(keys),
+        "replies": sum(effective_status(status.get(key)) in
+                       ("replied", "call_booked") for key in keys),
+        "due": sum(followup_due(status.get(key), now=now) for key in keys),
+        "remaining": max(DAILY_QUEUE_CAP - initial_sends_today(status, now), 0),
+    }
 
 
 def render_sidebar_stats():
@@ -671,54 +686,33 @@ def render_sidebar_stats():
     with st.sidebar:
         st.divider()
         a, b = st.columns(2)
-        a.metric("Follow-ups due", s["due"],
-                 help="Contacted leads whose last touch is "
-                      f"≥{FOLLOWUP_DAYS} days old (max {MAX_FOLLOWUPS} "
-                      "follow-ups per lead). Work these first.")
-        b.metric("New leads", s["new"],
-                 help="Signals not yet contacted or dismissed.")
+        a.metric("Replies", s["replies"])
+        b.metric("Follow-ups due", s["due"])
         c, d = st.columns(2)
-        c.metric("Touched today", s["touched"],
-                 help="Leads marked contacted/replied/won today.")
-        d.metric("Boards watched", s["boards"],
-                 help="Job boards swept nightly (see System → Watchlist).")
+        c.metric("Prospects", s["prospects"])
+        d.metric("Sends left", s["remaining"],
+                 help="Remaining in today's operator-chosen initial-send budget.")
 
 
 # what the "?" popover says per page + the Help section it jumps to
 PAGE_BLURBS = {
-    "home": "Today's numbers, the pipeline funnel, billable summary, "
-            "setup checklist and engine run buttons.",
-    "queue": "Your daily working view: follow-ups due first, then the "
-             "top-ranked new sends. Copy the DM, send it on LinkedIn, click "
-             "Sent. Focus mode walks you through one card at a time.",
-    "inbox": "Every signal ever captured, with stage, notes and DM drafts. "
-             "Use it to manage conversations after the first touch.",
-    "prospects": "OUR pipeline: recruitment agencies we want as clients. "
-                 "Found by the prospector, hooked by their fresh mandates, "
-                 "armed with a one-click mini-list per prospect.",
-    "clients": "Per-client lead list, metrics and the billable total; "
-               "export any filtered view as a client report CSV.",
-    "minilist": "Builds the free 'companies hiring in your niche' gift list "
-                "for a prospect agency — CSV + branded HTML one-pager.",
-    "watchlist": "The job boards swept nightly. Paste any board URL to add "
-                 "one; run discovery to find more automatically.",
-    "livejobs": "Every live job currently tracked across all watched boards "
-                "— search, filter, export.",
-    "configs": "Client profiles: filter gates, message templates, meeting "
-               "rate. Test a config before trusting it, then backfill.",
-    "help": "How the whole machine works, page by page.",
+    "prospects": "Review agencies, approved samples and final messages. "
+                 "Record a send only after sending it manually.",
+    "clients": "Set up and deliver work for an actual client.",
+    "signals": "Check employer and agency boards, their refresh results "
+               "and the jobs they advertise.",
+    "settings": "Adjust prospect criteria and templates, inspect data "
+                "location, backups and run history.",
 }
 
 
 def page_header(title: str, page_key: str):
-    """Page title + '?' popover linking to the page's Help section."""
+    """Page title and concise inline help."""
     c1, c2 = st.columns([0.93, 0.07], vertical_alignment="center")
     with c1:
         st.title(title)
     with c2:
         with st.popover("?", help="What is this page?"):
-            st.markdown(PAGE_BLURBS.get(page_key, ""))
-            if st.button("📖 Open the full guide", key=f"help_jump_{page_key}",
-                         help="Opens the Help page at this page's section."):
-                st.session_state["help_jump"] = page_key
-                st.switch_page("views/help.py")
+            st.markdown(PAGE_BLURBS.get(
+                page_key, "This is a client delivery tool. Select a section "
+                          "at the top of Clients to switch tasks."))

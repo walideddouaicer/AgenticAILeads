@@ -21,8 +21,8 @@ choice = st.selectbox("Profile", profiles + ["➕ New client"],
 
 if not profiles:
     st.info("**No client profiles yet.** Fill in the form below and click "
-            "Save — start with your own prospecting profile (client ID "
-            "`default`).")
+            "Save. Give the client a distinct ID; `default` is reserved "
+            "for the app's own prospecting filter.")
 
 if choice == "➕ New client":
     cfg = {**{k: (v if not isinstance(v, (list, dict)) else type(v)())
@@ -95,7 +95,7 @@ with col_form:
                                    step=25,
                                    help="What this client pays per showed "
                                         "meeting. Drives the Billable "
-                                        "numbers on Home and client pages.")
+                                   "recorded estimates on the client report.")
 
     st.subheader("Delivery channel")
     ch_cur = cfg.get("channel", "linkedin")
@@ -195,8 +195,8 @@ with col_test:
     jobs = C.all_tracked_jobs()
     if not jobs:
         st.info("**No tracked jobs yet** — the dry run needs "
-                "`signals_state.json`. Run the sweep from the Home page "
-                "(or `python signal_engine.py`) first.")
+                "a successful employer-board refresh. Run Refresh employer "
+                "boards in Signals first.")
         C.render_engine_panel()
         C.engine_button("sweep", key="cfg_run_sweep")
     else:

@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 import csv
+import io
 import json
 from pathlib import Path
 import sys
@@ -202,7 +203,12 @@ def test_review_controls_export_and_template_counts():
     assert reviewed[0]["hiring_now"] == "Senior Java Engineer"
     assert reviewed[0]["source_title"] == "Java Engineer"
     assert row["hiring_now"] == "Java Engineer"
-    assert "source_title" in minilist_engine.render_csv(reviewed)
+    exported = list(csv.DictReader(io.StringIO(
+        minilist_engine.render_csv(reviewed))))
+    assert exported[0]["job_url"] == row["job_url"]
+    assert exported[0]["source_board"] == row["source_board"]
+    assert exported[0]["verified_at"] == row["verified_at"]
+    assert exported[0]["source_title"] == "Java Engineer"
     message = core.render_prospect_dm(
         "{sample_count} roles, {contact_count} contacts", {}, "", reviewed)
     assert message == "1 roles, 1 contacts"

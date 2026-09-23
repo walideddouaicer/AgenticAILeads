@@ -18,9 +18,10 @@ if not leads:
     st.info("**No signals yet.** The queue fills up once the signal engine "
             "has run twice (first run records the baseline, the next runs "
             "report new roles).")
-    st.markdown("1. Make sure the watchlist has boards — **System → Watchlist**\n"
-                "2. Run the sweep below (or `python signal_engine.py`)\n"
-                "3. Come back here — new leads appear ranked and pre-drafted")
+    st.markdown("1. Add employer boards in **Signals**.\n"
+                "2. Refresh employer boards in **Signals** to establish a "
+                "baseline, then refresh again when new roles appear.\n"
+                "3. Return to **Clients → Matched companies** to review matches.")
     C.render_engine_panel()
     C.engine_button("sweep", key="q_run_sweep")
     st.stop()
@@ -271,5 +272,5 @@ else:
         for i, r in enumerate(fresh[:q_cap]):
             outreach_card(r, "new", i)
     else:
-        st.caption("No new leads — run the sweep (Home page) or grow the "
-                   "watchlist (System → Watchlist).")
+        st.caption("No new leads — refresh employer boards or add sources "
+                   "in Signals.")

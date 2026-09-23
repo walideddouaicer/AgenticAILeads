@@ -18,16 +18,15 @@ TESTS = Path(__file__).resolve().parent
 ROOT = TESTS.parent
 
 PAGES = [
-    # Visible by default
-    "views/prospects.py", "views/signals.py",
-    "views/home.py", "views/minilist.py", "views/help.py",
-    # Hidden behind AAL_SHOW_CLIENT_PAGES but still rendered here — they
-    # must keep working for the week client #1 signs.
-    "views/queue.py", "views/inbox.py", "views/clients.py",
-    "views/configs.py",
-    # Superseded by views/signals.py; kept until Help is rewritten.
-    "views/watchlist.py", "views/livejobs.py",
+    "views/prospects.py", "views/clients.py", "views/signals.py",
+    "views/settings.py",
+    # Legacy client and system tools remain exercised until Phases 5–6
+    # replace/remove them. They are no longer sidebar destinations.
+    "views/minilist.py", "views/help.py",
+    "views/queue.py", "views/inbox.py", "views/client_report.py",
+    "views/configs.py", "views/watchlist.py", "views/livejobs.py",
 ]
+ACTIVE_PAGES = set(PAGES[:4])
 
 # ---------------- orchestrator ----------------
 
@@ -41,7 +40,6 @@ if "--single" not in sys.argv:
                             (TESTS / "fixture_data", ["--interact"])]:
         print(f"\n=== pages against {data_dir.name} ===")
         env = dict(os.environ, AAL_DATA_DIR=str(data_dir),
-                   AAL_SHOW_CLIENT_PAGES="1",
                    AAL_DISABLE_AUTH="1")  # bypass login gate for page tests
         r = subprocess.run([sys.executable, __file__, "--single"] + extra,
                            env=env)
@@ -69,9 +67,7 @@ def check(name, cond, detail=""):
 
 
 def fresh(page):
-    # Legacy pages are no longer registered by app.py. Exercise their
-    # remaining code directly until Phase 6 removes them.
-    if page in ("views/watchlist.py", "views/livejobs.py"):
+    if page not in ACTIVE_PAGES:
         return AppTest.from_file(ROOT / page, default_timeout=30).run()
     at = AppTest.from_file(ROOT / "app.py", default_timeout=30).run()
     assert not at.exception, [e.value for e in at.exception]
@@ -84,6 +80,24 @@ for page in PAGES:
     at = fresh(page)
     errs = [e.value for e in at.exception]
     check(f"render {page}", not errs, str(errs))
+
+if not INTERACT:
+    at = fresh("views/prospects.py")
+    entry = {widget.key: widget for widget in at.text_input}
+    entry["add_agency"].set_value("Fixture Recruiting")
+    entry["add_person"].set_value("Test Contact")
+    entry["add_linkedin"].set_value("https://www.linkedin.com/in/test-contact")
+    entry["add_niche"].set_value("Java")
+    [button for button in at.button
+     if button.key == "prospect_add_person"][0].click()
+    at.run()
+    check("manual prospect entry renders", not at.exception,
+          str([error.value for error in at.exception]))
+    with (DATA / "prospects.csv").open(newline="", encoding="utf-8") as stream:
+        import csv
+        imported = list(csv.DictReader(stream))
+    check("manual prospect entry persists without a CLI",
+          len(imported) == 1 and imported[0]["agency"] == "Fixture Recruiting")
 
 if INTERACT:
     print("  -- interactions --")
@@ -238,7 +252,7 @@ if INTERACT:
     check("queue has 'Export for email tool' button",
           any("email tool" in str(getattr(b, "label", "")).lower()
               for b in at.download_button))
-    at = fresh("views/clients.py")
+    at = fresh("views/client_report.py")
     check("client page has email-tool export",
           any("email tool" in str(getattr(b, "label", "")).lower()
               for b in at.download_button))
@@ -258,37 +272,23 @@ if INTERACT:
         check("sync-replies disabled when no key",
               sync_btns and sync_btns[0].disabled)
 
-    # ---- Loop A pages are hidden by default, restored by the env flag ----
-    # The four client pages still exist and still render (every entry in
-    # PAGES above is exercised regardless) — only the sidebar entries are
-    # gated. This guards the gate itself: a typo in the env var name would
-    # otherwise either hide them forever or never hide them at all.
-    print("  -- navigation gate --")
-    def client_page_available(show):
-        prev = os.environ.get("AAL_SHOW_CLIENT_PAGES")
-        if show:
-            os.environ["AAL_SHOW_CLIENT_PAGES"] = "1"
-        else:
-            os.environ.pop("AAL_SHOW_CLIENT_PAGES", None)
+    print("  -- four-screen navigation --")
+    nav = AppTest.from_file(ROOT / "app.py", default_timeout=30).run()
+    for page in PAGES[:4]:
         try:
-            at = AppTest.from_file(ROOT / "app.py", default_timeout=30).run()
-            assert not at.exception, [e.value for e in at.exception]
-            try:
-                at.switch_page("views/queue.py")
-            except ValueError:
-                return False
-            at.run()
-            assert not at.exception, [e.value for e in at.exception]
-            return True
-        finally:
-            if prev is None:
-                os.environ.pop("AAL_SHOW_CLIENT_PAGES", None)
-            else:
-                os.environ["AAL_SHOW_CLIENT_PAGES"] = prev
-
-    check("client pages hidden by default", client_page_available(False) is False)
-    check("client pages restored by AAL_SHOW_CLIENT_PAGES=1",
-          client_page_available(True) is True)
+            nav.switch_page(page)
+            nav.run()
+            available = not nav.exception
+        except ValueError:
+            available = False
+        check(f"navigation includes {page}", available)
+    try:
+        nav.switch_page("views/home.py")
+    except ValueError:
+        old_home_visible = False
+    else:
+        old_home_visible = True
+    check("superseded Home is absent from navigation", not old_home_visible)
 
 print()
 if fails:

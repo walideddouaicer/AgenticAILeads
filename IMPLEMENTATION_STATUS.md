@@ -1,7 +1,6 @@
 # Implementation status
 
-Updated: 23 September 2026. Scope: Phase 0 baseline, Phase 1 persistence,
-Phase 2 evidence/sample correctness, and Phase 3 queue/actions.
+Updated: 23 September 2026. Scope: Phases 0–4 through interface consolidation.
 
 ## Checkpoints
 
@@ -18,7 +17,9 @@ Phase 2 evidence/sample correctness, and Phase 3 queue/actions.
 - Phase 2 sample review checkpoint: `Review and approve sample rows before export gbt 9.0`.
   Hash: `b34a886`.
 - Phase 3 queue and send-history checkpoint: `Unify outreach queue and record manual sends gbt 10.0`.
-  Its hash is reported with the commit. Next suffix after it: `gbt 11.0`.
+  Hash: `4b0b74f`.
+- Phase 4 interface checkpoint: `Consolidate acquisition screens and CSV import gbt 11.0`.
+  Hash is reported with the commit. Next suffix: `gbt 12.0`.
 
 | Phase | Status |
 |---|---|
@@ -26,7 +27,7 @@ Phase 2 evidence/sample correctness, and Phase 3 queue/actions.
 | 1 — persistence and process execution | Complete through `gbt 6.0` |
 | 2 — evidence and sample correctness | Implemented offline through `gbt 9.0`; live compatibility still unverified |
 | 3 — unified queue and durable actions | Implemented offline through `gbt 10.0` |
-| 4 — interface consolidation | Not started |
+| 4 — interface consolidation | Implemented offline at `gbt 11.0` |
 | 5 — minimum client delivery | Not started |
 | 6 — dead paths and documentation | Not started |
 | 7 — Linux operation and recovery | Not started |
@@ -232,7 +233,42 @@ status entries, and
 corrections. Existing operational
 data was not migrated in this checkout.
 
+## Phase 4 result
+
+- The sidebar has four screens: Prospects, Clients, Signals and Settings.
+  Prospects opens on the daily acquisition queue. Its All view uses the same
+  selected-record review controls and shows identity correction and recorded
+  send history. Replies, due follow-ups and eligible first sends stay in
+  priority order. Message drafts persist across rerenders and screen switches.
+- Prospect criteria and message templates moved to Settings. Signals now owns
+  employer and agency board refresh, source lists and confirmed agency-board
+  mapping. Client tools remain available within Clients while Phase 5 joins
+  their workflow more tightly. Old client screens and code remain until their
+  required behavior is replaced; they are no longer sidebar entries.
+- Prospects can import a UTF-8 CSV or add one person manually. Preview shows
+  accepted counts and row-numbered rejection reasons. Accepted rows append
+  without replacing existing corrections; repeated imports are idempotent.
+  The upload clears after saving so newly imported rows are not presented as
+  fresh rejections. Sample review presents a source-job link, board identity
+  and verification time; approved CSV rows retain the same source fields.
+- Source and import failures present correction steps. Technical collector
+  logs are behind details. Active client copy points to the new navigation.
+  Settings and sample-edit surfaces warn that unsaved edits will be discarded.
+
+Verification: the isolated `scripts/check.py` suite passed on Windows Python
+3.12.14 with no external requests. It includes empty and populated page checks,
+manual-entry and import rejection checks, sample approval/correction and stale
+source checks, and the Phase 3 queue and budget regressions. A local browser
+walkthrough with disposable data confirmed four-screen navigation, empty client
+setup, manual prospect entry, draft persistence across views, and CSV preview
+with one accepted and two rejected rows followed by successful import. The
+browser view was checked at approximately 900×640 px; the sidebar budget label
+was shortened after it appeared clipped. No real board refresh, provider lookup,
+outreach, push, deployment or schedule occurred. Live provider behavior and
+founder acceptance remain unverified.
+
 ## Next phase
 
-Phase 4: consolidate the interface into Prospects, Clients, Signals and
-Settings; provide the ordinary import/edit/review path without terminal edits.
+Phase 5: consolidate the first-client workflow and complete meeting outcome
+tracking and reporting. Stop before Phase 6 cleanup until those behaviors are
+exercised on the replacement client screen.

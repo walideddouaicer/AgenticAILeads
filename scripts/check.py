@@ -89,6 +89,7 @@ def main():
                     ("evidence", ["tests/test_evidence.py"]),
                     ("sample-review-page", ["tests/test_sample_review_page.py"]),
                     ("outreach", ["tests/test_outreach.py"]),
+                    ("prospect-import", ["tests/test_prospect_import.py"]),
                     ("delivery", ["tests/test_delivery.py"]),
                     ("pages", ["tests/test_pages.py"]),
                     ("workflow-gaps", ["tests/test_workflow_gaps.py"])]

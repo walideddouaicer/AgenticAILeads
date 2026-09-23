@@ -24,6 +24,7 @@ ENGINE_SCRIPTS = {
     "enrich": "enrichment_engine.py",
     "discover": "discovery_engine.py",
     "prospector": "prospector_engine.py",
+    "agency_sweep": "prospect_signal_engine.py",
     "find_mandates": "agency_discovery.py",
     "build_today": "build_today.py",
 }

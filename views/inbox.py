@@ -12,8 +12,8 @@ status = C.load_status()
 if not leads:
     st.info("**No signals yet.** Signals appear after the signal engine has "
             "run twice (first run = baseline).")
-    st.markdown("Run the sweep from the **Home** page, or in a terminal: "
-                "`python signal_engine.py`")
+    st.markdown("Add and refresh employer boards in **Signals**, then "
+                "review the matches in **Clients → Matched companies**.")
     st.stop()
 
 c1, c2, c3 = st.columns([1, 1, 2])
