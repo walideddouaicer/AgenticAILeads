@@ -1,6 +1,6 @@
 # Implementation status
 
-Updated: 23 September 2026. Scope: Phases 0–4 through interface consolidation.
+Updated: 23 September 2026. Scope: Phases 0–5 through first-client delivery.
 
 ## Checkpoints
 
@@ -19,7 +19,9 @@ Updated: 23 September 2026. Scope: Phases 0–4 through interface consolidation.
 - Phase 3 queue and send-history checkpoint: `Unify outreach queue and record manual sends gbt 10.0`.
   Hash: `4b0b74f`.
 - Phase 4 interface checkpoint: `Consolidate acquisition screens and CSV import gbt 11.0`.
-  Hash is reported with the commit. Next suffix: `gbt 12.0`.
+  Hash: `9dc1752`.
+- Phase 5 client-delivery checkpoint: `Complete first-client delivery and meeting records gbt 12.0`.
+  Hash is reported with the commit. Next suffix: `gbt 13.0`.
 
 | Phase | Status |
 |---|---|
@@ -28,7 +30,7 @@ Updated: 23 September 2026. Scope: Phases 0–4 through interface consolidation.
 | 2 — evidence and sample correctness | Implemented offline through `gbt 9.0`; live compatibility still unverified |
 | 3 — unified queue and durable actions | Implemented offline through `gbt 10.0` |
 | 4 — interface consolidation | Implemented offline at `gbt 11.0` |
-| 5 — minimum client delivery | Not started |
+| 5 — minimum client delivery | Implemented offline at `gbt 12.0` |
 | 6 — dead paths and documentation | Not started |
 | 7 — Linux operation and recovery | Not started |
 | 8 — release rehearsal | Not started |
@@ -267,8 +269,46 @@ was shortened after it appeared clipped. No real board refresh, provider lookup,
 outreach, push, deployment or schedule occurred. Live provider behavior and
 founder acceptance remain unverified.
 
+## Phase 5 result
+
+- Clients now has one selected-client workflow for profile setup, current
+  employer matches, outreach, and outcomes/reporting. A profile is created or
+  edited in the app with niche, market, exclusion terms, channel, templates and
+  agreed meeting rate. The own-prospecting `default` profile is never shown as
+  a paying client. Legacy data-only clients remain visible so their history is
+  not hidden; without a saved agreed rate, their estimate says "Rate needed."
+- Matching jobs show source URL, board and recent verification. An operator
+  selects the verified jobs to backfill. The save path rechecks the saved client
+  profile and current board evidence; it rejects stale selections. Backfill
+  retains the first-sweep baseline and is repeat-safe across calendar dates.
+  Separate client niches produce separate matches.
+- A selected client lead shows its posting, evidence, contact correction and
+  cross-client duplicate-contact warning. Manual sends record the final edited
+  message, contact, channel, operator and UTC timestamp in the client status
+  file. Reply/won/dismissed outcomes and notes remain editable. These actions
+  do not touch prospect acquisition status. The default last follow-up to an
+  employer no longer repeats the agency-facing free-meeting offer.
+- `client_meetings.json` stores one attended-meeting record keyed by client and
+  meeting identity, with date, attendee, linked lead keys, notes and free versus
+  chargeable status. The first meeting defaults to free. Two vacancy rows
+  linked to one meeting still yield one outcome. Only distinct recorded
+  chargeable meetings use the client's agreed rate for a "Recorded estimate";
+  the app labels it neither an invoice nor a confirmed payment. Future meeting
+  dates and duplicate new meeting IDs are rejected. The CSV contains exactly
+  the selected lead rows and their actual meeting records.
+
+Verification: the isolated runner passed on Windows Python 3.12.14, including
+new domain and AppTest checks. The UI check creates a client, selects and
+backfills a verified job, edits and records a manual message, records a free
+first meeting and a chargeable second meeting, and verifies the per-client
+estimate and export availability. Domain checks cover two distinct niches,
+cross-date duplicate backfill, stale source rejection, cross-client contact
+warning, one meeting linked to two vacancies, per-client rates and report
+filtering. No live provider call, actual outreach, push, deployment or
+scheduling occurred. The old client page files remain for Phase 6 removal;
+live source compatibility and founder acceptance are still unverified.
+
 ## Next phase
 
-Phase 5: consolidate the first-client workflow and complete meeting outcome
-tracking and reporting. Stop before Phase 6 cleanup until those behaviors are
-exercised on the replacement client screen.
+Phase 6: remove superseded screens and unsupported vendor send/reply-sync
+paths after confirming the replacement client screen covers the required work.

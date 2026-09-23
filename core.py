@@ -97,8 +97,8 @@ DEFAULT_FOLLOWUP_TEMPLATE = (
 )
 DEFAULT_FOLLOWUP2_TEMPLATE = (
     "Hi {first_name} — last note from me. If filling roles faster ever becomes "
-    "a priority, happy to show you how we work: you pay per meeting that "
-    "actually happens, first one free. Door's open."
+    "a priority, happy to discuss the {title} opening and the people we "
+    "might be able to introduce. Door's open."
 )
 FOLLOWUP_DAYS = 3
 MAX_FOLLOWUPS = 2   # after follow-up #2 (breakup), lead leaves the queue
