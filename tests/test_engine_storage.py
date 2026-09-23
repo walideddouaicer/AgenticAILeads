@@ -70,6 +70,38 @@ def test_discovery_and_minilist_reject_corrupt_json():
             discovery_engine.STATE_FILE = old
 
 
+def test_employer_sweep_never_substitutes_another_board_list():
+    from unittest.mock import patch
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder)
+        watchlist = root / "watchlist.json"
+        paths = {"_WATCHLIST_FILE": watchlist,
+                 "STATE_FILE": root / "signals_state.json",
+                 "HISTORY_FILE": root / "job_history.json",
+                 "CSV_FILE": root / "signals.csv",
+                 "CHECKPOINT_FILE": root / "signal_sweep.pending.json",
+                 "REFRESH_FILE": root / "board_refresh.json"}
+        fetched = []
+
+        def fetch(platform, token):
+            fetched.append(f"{platform}:{token}")
+            return {}
+
+        with (patch.multiple(signal_engine, **paths, fetch_board=fetch),
+              patch.object(sys, "argv", ["signal_engine.py"])):
+            assert signal_engine.main() == 0      # missing: no boards
+            watchlist.write_text('{"greenhouse": ["mine"', encoding="utf-8")
+            try:
+                signal_engine.main()
+            except SystemExit as stop:
+                assert "damaged" in str(stop.code), stop.code
+            else:
+                raise AssertionError("damaged watchlist did not stop the sweep")
+        assert fetched == [], fetched
+        assert watchlist.read_text(encoding="utf-8") == '{"greenhouse": ["mine"'
+        assert sorted(p.name for p in root.iterdir()) == ["watchlist.json"]
+
+
 def main():
     tests = [value for name, value in sorted(globals().items())
              if name.startswith("test_") and callable(value)]

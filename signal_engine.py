@@ -33,6 +33,7 @@ from runtime import DATA_DIR
 from sweep_core import (commit_sweep_batch, enable_utf8_stdout, load_history,
                         load_json_state, record_observations,
                         recover_sweep_checkpoint, summarize)
+from storage import DataFileError, read_json
 from tls_compat import enable_os_trust_store
 
 enable_os_trust_store()
@@ -48,33 +49,22 @@ except ImportError:
 # CONFIG
 # ----------------------------------------------------------------------
 
-# Watchlist lives in watchlist.json (manage it from the app's Watchlist tab).
-# The dict below is only the fallback if that file is missing/broken.
-_FALLBACK_WATCHLIST = {
-    "greenhouse": [
-        "gitlab", "datadog", "elastic", "cloudflare",
-        "mongodb", "figma", "postman", "vercel",
-    ],
-    "lever": ["plaid", "spotify"],
-    "ashby": ["linear", "sentry"],
-    "workable": ["huggingface"],
-}
-
+# Tracked employer boards live in watchlist.json (managed on Signals).
 _WATCHLIST_FILE = DATA_DIR / "watchlist.json"
 
 
 def load_watchlist():
-    if _WATCHLIST_FILE.exists():
-        try:
-            wl = json.loads(_WATCHLIST_FILE.read_text(encoding="utf-8"))
-            return {p: [str(t).strip().lower() for t in wl.get(p, []) if str(t).strip()]
-                    for p in ["greenhouse", "lever", "ashby", "workable"]}
-        except (json.JSONDecodeError, OSError):
-            print("  [!] watchlist.json unreadable — using built-in fallback list")
-    return _FALLBACK_WATCHLIST
+    """Missing file means no boards; a damaged file stops the sweep.
+
+    Never substitute another board list: that would refresh boards the
+    operator did not choose while their own evidence silently goes stale.
+    """
+    wl = read_json(_WATCHLIST_FILE, default={}, expected_type=dict)
+    return {p: [str(t).strip().lower() for t in wl.get(p, []) if str(t).strip()]
+            for p in ["greenhouse", "lever", "ashby", "workable"]}
 
 
-WATCHLIST = load_watchlist()
+WATCHLIST = None  # loaded by main(); tests may patch a fixed list
 
 # FALLBACK ONLY — used when no configs/ directory exists. Once Phase 3
 # configs are in place, edit filters in configs/*.json (or via app.py UI).
@@ -348,6 +338,12 @@ def main():
     if args.probe:
         return probe_board(args.probe)
 
+    try:
+        watchlist = WATCHLIST if WATCHLIST is not None else load_watchlist()
+    except DataFileError as error:
+        sys.exit(f"{error} Nothing was refreshed. Restore watchlist.json from "
+                 "a backup or correct it, then refresh again.")
+
     recovered = recover_sweep_checkpoint(
         CHECKPOINT_FILE, STATE_FILE, HISTORY_FILE, CSV_FILE,
         FIELDNAMES, SIGNAL_KEY_FIELDS)
@@ -362,14 +358,18 @@ def main():
     today = date.today().isoformat()
     all_signals = []
     outcomes = {}
-    total = sum(len(v) for v in WATCHLIST.values())
+    total = sum(len(v) for v in watchlist.values())
+    if not total:
+        print("No employer boards are tracked. Add boards on Signals, then "
+              "refresh again.")
+        return 0
 
     configs = load_configs() if load_configs else []
     mode = f"{len(configs)} client config(s)" if configs else "legacy KEYWORDS filter"
     print(f"Signal engine sweep — {today} — {total} companies, "
-          f"{sum(1 for v in WATCHLIST.values() if v)} platform(s) — {mode}\n")
+          f"{sum(1 for v in watchlist.values() if v)} platform(s) — {mode}\n")
 
-    for platform, tokens in WATCHLIST.items():
+    for platform, tokens in watchlist.items():
         for token in tokens:
             key = board_key(platform, token)
             try:

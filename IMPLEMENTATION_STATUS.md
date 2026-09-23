@@ -31,6 +31,7 @@ Updated: 23 September 2026. Scope: Phases 0–7 complete offline; Phase 8 rehear
   `f9dd1e7` — `Close won-agency to client handoff gaps gbt 17.0`;
   `d8ac3ab` — `Show recovery steps for damaged data files gbt 18.0`.
   This Phase 8 record is `Record Phase 8 rehearsal and open release gates gbt 19.0`.
+  Review fix: `Stop employer refresh on a damaged board list gbt 20.0`.
 
 | Phase | Status |
 |---|---|
@@ -452,6 +453,11 @@ No live provider call, outreach, push, deployment or schedule occurred.
   stage keys in undo labels, stale Signals copy and the developer Deploy menu
   were removed.
 - `gbt 18.0`: a damaged business file broke every screen with a traceback.
+- `gbt 20.0` (follow-up review against all plan phases): a damaged or
+  missing `watchlist.json` made the employer refresh silently sweep a
+  built-in list of 13 unrelated boards. A damaged file now stops the refresh
+  with the error and leaves the file untouched; a missing file means no
+  employer boards, matching the Signals screen.
 Each fix has a regression check that fails on the previous code.
 
 ### Release gates
