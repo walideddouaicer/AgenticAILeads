@@ -88,6 +88,7 @@ def main():
                     ("matching", ["tests/test_matching.py"]),
                     ("evidence", ["tests/test_evidence.py"]),
                     ("sample-review-page", ["tests/test_sample_review_page.py"]),
+                    ("outreach", ["tests/test_outreach.py"]),
                     ("delivery", ["tests/test_delivery.py"]),
                     ("pages", ["tests/test_pages.py"]),
                     ("workflow-gaps", ["tests/test_workflow_gaps.py"])]
@@ -102,8 +103,7 @@ def main():
             except subprocess.TimeoutExpired:
                 output, code = "Check exceeded 180 seconds", 124
             results.append({"name": name, "exit_code": code})
-            label = ("KNOWN BLOCKERS" if name == "workflow-gaps" and code == 0
-                     else "PASS" if code == 0 else "FAIL")
+            label = "PASS" if code == 0 else "FAIL"
             print(f"{label} {name}", flush=True)
             if name == "workflow-gaps" or code:
                 print(output[-12000:], flush=True)
@@ -112,7 +112,8 @@ def main():
         if logs:
             (logs / "summary.json").write_text(json.dumps(results, indent=2),
                                                 encoding="utf-8")
-        print("Expected failures are unresolved release blockers, not passing features.")
+        print("All checks passed." if not any(result["exit_code"] for result in results)
+              else "Some checks failed.")
         return int(any(result["exit_code"] for result in results))
 
 

@@ -42,9 +42,8 @@ with qc1:
 with qc2:
     q_cap = int(st.number_input("Daily cap (new sends)", 1, 50,
                                 C.DAILY_QUEUE_CAP, key="q_cap",
-                                help="Max NEW leads queued per day. Keep it "
-                                     "LinkedIn-safe (~15/day, 100–150 "
-                                     "connection requests/week)."))
+                                help="Operator-chosen target for new leads "
+                                     "queued per day; not a platform safety limit."))
 
 due, fresh = [], []
 for r in leads:

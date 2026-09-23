@@ -464,6 +464,36 @@ def set_stage(status, key, stage, notes=None, lead_label: str = "", path=None):
                icons.get(stage, "✅"))
 
 
+def record_prospect_send(status, key, *, message, sample, channel,
+                         lead_label="", action_id=None, expected=None):
+    """Record a manual send with the same conflict-safe undo as stage edits."""
+    from outreach import record_send
+
+    previous_undo = st.session_state.get("_undo")
+    _snapshot_undo(status, key, f"send to {lead_label or key}", PROSPECTS_STATUS)
+    try:
+        action, duplicate = record_send(
+            status, key, message=message, sample=sample, channel=channel,
+            action_id=action_id,
+            operator=st.session_state.get("_user") or "local operator",
+            expected=expected if expected is not None else status_revision(status, key))
+    except Exception:
+        if previous_undo is None:
+            st.session_state.pop("_undo", None)
+        else:
+            st.session_state["_undo"] = previous_undo
+        raise
+    if duplicate:
+        if previous_undo is None:
+            st.session_state.pop("_undo", None)
+        else:
+            st.session_state["_undo"] = previous_undo
+        return None
+    st.session_state["_undo"]["expected"] = status_revision(status, key)
+    push_toast(f"Manual send recorded for {lead_label or key}", "✅")
+    return action
+
+
 # ============================ engine runner ============================
 # Runs signal/enrichment/discovery engines as subprocesses of the app,
 # streaming their stdout into the page. A lockfile plus the session job

@@ -25,7 +25,7 @@ def main():
 
         prospect = {"date_found": "2026-09-23", "agency": "Agency Ltd",
                     "person_name": "Alex Smith", "person_title": "Founder",
-                    "linkedin": "https://linkedin.test/alex", "email": "",
+                    "linkedin": "https://www.linkedin.com/in/alex", "email": "",
                     "location": "London, UK", "size": "12",
                     "source": "fixture", "niche_keywords": "java"}
         with (data / "prospects.csv").open("w", newline="",

@@ -42,6 +42,7 @@ AAL_DATA_DIR relocates the data directory (tests, container deploy).
 
 import csv
 import hashlib
+import io
 import json
 import re
 from datetime import date, datetime
@@ -51,7 +52,8 @@ from urllib.parse import quote
 import delivery
 from evidence import confirmed_boards, load_refreshes, verified_at
 from filter_engine import DEFAULTS, keyword_matches
-from storage import (DELETE, UNSET, atomic_write_json, read_json, revision,
+from storage import (ConflictError, DataFileError, DELETE, FileLock, UNSET,
+                     atomic_write_json, atomic_write_text, read_json, revision,
                      update_json, update_json_record)
 from runtime import DATA_DIR, ENV_FILE, HERE
 
@@ -69,6 +71,8 @@ DISCOVERY_STATE = DATA_DIR / "discovery_state.json"
 PROSPECTS_CSV = DATA_DIR / "prospects.csv"
 PROSPECT_SIGNALS_CSV = DATA_DIR / "prospect_signals.csv"
 PROSPECTS_STATUS = DATA_DIR / "prospects_status.json"
+PROSPECT_ALIASES = DATA_DIR / "prospect_key_aliases.json"
+PROSPECT_IDENTITY_PENDING = DATA_DIR / "prospect_identity_pending.json"
 PROSPECTS_CONFIG = DATA_DIR / "prospects_config.json"
 AGENCY_WATCHLIST_FILE = DATA_DIR / "agency_watchlist.json"
 AGENCY_BOARD_MAPPINGS = DATA_DIR / "agency_board_mappings.json"
@@ -100,7 +104,7 @@ FOLLOWUP_DAYS = 3
 MAX_FOLLOWUPS = 2   # after follow-up #2 (breakup), lead leaves the queue
 FRESH_DAYS = 7      # legacy UI constant; current evidence uses 48-hour checks
 DEFAULT_MEETING_RATE = 150
-DAILY_QUEUE_CAP = 15   # default new sends/day (LinkedIn-safe)
+DAILY_QUEUE_CAP = 15   # operator's default initial-send budget, not a platform limit
 
 STAGES = ["contacted", "replied", "won"]
 # legacy stage names from earlier versions -> current
@@ -249,12 +253,13 @@ def load_leads():
     return rows, label
 
 
-def load_status(path=None):
+def load_status(path=None, *, with_revisions=False):
     """{key: {'status': str, 'on': iso, 'notes': str}} — migrates all
     earlier formats (plain string, legacy stage names, snooze fields).
     Default file is the lead inbox; pass PROSPECTS_STATUS for prospects."""
     path = path or INBOX_STATUS
     raw = read_json(path, default={}, expected_type=dict)
+    raw_revisions = {key: revision(value) for key, value in raw.items()}
     out = {}
     for k, v in raw.items():
         if isinstance(v, str):
@@ -264,7 +269,7 @@ def load_status(path=None):
         s = v.get("status", "new")
         v["status"] = LEGACY_MAP.get(s, s)
         out[k] = v
-    return out
+    return (out, raw_revisions) if with_revisions else out
 
 
 def save_status(status, path=None):
@@ -329,7 +334,7 @@ def effective_status(entry) -> str:
     return entry.get("status", "new")
 
 
-def followup_due(entry) -> bool:
+def followup_due(entry, *, now=None) -> bool:
     if not entry or entry.get("status") != "contacted":
         return False
     try:
@@ -339,7 +344,8 @@ def followup_due(entry) -> bool:
         pass
     on = entry.get("on") or ""
     try:
-        return (date.today() - datetime.strptime(on, "%Y-%m-%d").date()).days >= FOLLOWUP_DAYS
+        today = now.date() if now is not None else date.today()
+        return (today - datetime.strptime(on, "%Y-%m-%d").date()).days >= FOLLOWUP_DAYS
     except ValueError:
         return False
 
@@ -486,10 +492,16 @@ def apply_followup(status, key, path=None):
 
 def load_prospects():
     """Rows from prospects.csv (prospector_engine output + user edits)."""
+    recover_prospect_identity()
     if not PROSPECTS_CSV.exists():
         return []
     with PROSPECTS_CSV.open(newline="", encoding="utf-8") as stream:
-        return list(csv.DictReader(stream))
+        rows = list(csv.DictReader(stream))
+    aliases = read_json(PROSPECT_ALIASES, default={}, expected_type=dict)
+    for row in rows:
+        row["_status_key"] = aliases.get(_derived_prospect_key(row),
+                                         _derived_prospect_key(row))
+    return rows
 
 
 def load_prospect_signals():
@@ -506,10 +518,118 @@ def prospect_key(row):
     """Stable key for prospects_status.json: LinkedIn URL when present,
     else agency+person name — never collides with lead_key space because
     it lives in a separate file."""
+    return row.get("_status_key") or _derived_prospect_key(row)
+
+
+def _derived_prospect_key(row):
     lk = (row.get("linkedin") or "").strip().lower().rstrip("/")
     raw = lk or (f"{(row.get('agency') or '').strip().lower()}"
                  f"|{(row.get('person_name') or '').strip().lower()}")
     return hashlib.md5(raw.encode()).hexdigest()[:12]
+
+
+def prospect_row_revision(row):
+    return revision({key: value for key, value in row.items()
+                     if not key.startswith("_")})
+
+
+def _write_prospect_rows(fieldnames, rows):
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(rows)
+    atomic_write_text(PROSPECTS_CSV, output.getvalue())
+
+
+def recover_prospect_identity():
+    """Finish an interrupted identity correction before reading prospects."""
+    if not PROSPECT_IDENTITY_PENDING.exists():
+        return
+    with FileLock(PROSPECTS_CSV.with_name(PROSPECTS_CSV.name + ".lock"),
+                  label="recovering prospect correction", timeout=5):
+        if not PROSPECT_IDENTITY_PENDING.exists():
+            return
+        pending = read_json(PROSPECT_IDENTITY_PENDING, expected_type=dict)
+        old, new, key = (pending.get("old"), pending.get("new"),
+                         pending.get("status_key"))
+        if not isinstance(old, dict) or not isinstance(new, dict) or not key:
+            raise DataFileError("prospect_identity_pending.json is invalid; left unchanged")
+        with PROSPECTS_CSV.open(newline="", encoding="utf-8") as stream:
+            reader = csv.DictReader(stream)
+            fieldnames = reader.fieldnames or []
+            rows = list(reader)
+        original = next((row for row in rows if revision(row) == revision(old)), None)
+        finished = any(revision(row) == revision(new) for row in rows)
+        if original is None and not finished:
+            raise ConflictError("Prospect correction cannot be recovered: the CSV row changed")
+        new_raw = _derived_prospect_key(new)
+        if new_raw != _derived_prospect_key(old):
+            def add_alias(aliases):
+                if aliases.get(new_raw, key) != key:
+                    raise ConflictError("Prospect correction alias conflicts with another identity")
+                aliases[new_raw] = key
+            update_json(PROSPECT_ALIASES, add_alias, default={},
+                        expected_type=dict)
+        if original is not None:
+            original.update(new)
+            _write_prospect_rows(fieldnames, rows)
+        PROSPECT_IDENTITY_PENDING.unlink()
+
+
+def correct_prospect_identity(key, updates, *, expected):
+    """Correct a CSV row while retaining its status key and full send history.
+
+    A new-key alias is saved before the CSV replacement. If interrupted between
+    writes, the old row still resolves normally; after replacement the alias
+    resolves the corrected row to the same status record.
+    """
+    allowed = {"agency", "person_name", "person_title", "linkedin", "email",
+               "location", "niche_keywords"}
+    if not updates or set(updates) - allowed:
+        raise ValueError("Only prospect identity and contact fields can be corrected")
+    recover_prospect_identity()
+    with FileLock(PROSPECTS_CSV.with_name(PROSPECTS_CSV.name + ".lock"),
+                  label="correcting prospect", timeout=5):
+        with PROSPECTS_CSV.open(newline="", encoding="utf-8") as stream:
+            reader = csv.DictReader(stream)
+            fieldnames = reader.fieldnames or []
+            rows = list(reader)
+        aliases = read_json(PROSPECT_ALIASES, default={}, expected_type=dict)
+        matches = [row for row in rows if
+                   aliases.get(_derived_prospect_key(row),
+                               _derived_prospect_key(row)) == key]
+        if len(matches) != 1:
+            raise ConflictError("Prospect identity is missing or ambiguous; reload before editing")
+        row = matches[0]
+        if revision(row) != expected:
+            raise ConflictError("This prospect changed in another session. Reload before editing.")
+        corrected = dict(row)
+        for field, value in updates.items():
+            if field not in fieldnames:
+                raise DataFileError(f"prospects.csv has no {field} column")
+            corrected[field] = str(value).strip()
+        if not corrected.get("agency") or not corrected.get("person_name"):
+            raise ValueError("Agency and person name are required")
+        old_raw, new_raw = _derived_prospect_key(row), _derived_prospect_key(corrected)
+        if new_raw != old_raw:
+            if any(other is not row and _derived_prospect_key(other) == new_raw
+                   for other in rows) or aliases.get(new_raw, key) != key:
+                raise ConflictError("Another prospect already uses that identity")
+        atomic_write_json(PROSPECT_IDENTITY_PENDING,
+                          {"old": dict(row), "new": corrected,
+                           "status_key": key}, indent=1)
+        if new_raw != old_raw:
+            def add_alias(current):
+                if current.get(new_raw, key) != key:
+                    raise ConflictError("Another prospect already uses that identity")
+                current[new_raw] = key
+            update_json(PROSPECT_ALIASES, add_alias, default={},
+                        expected_type=dict)
+        row.update(corrected)
+        _write_prospect_rows(fieldnames, rows)
+        PROSPECT_IDENTITY_PENDING.unlink()
+    corrected["_status_key"] = key
+    return corrected
 
 
 def mandates_for_agency(agency_name, signals, *, mappings_file=None,

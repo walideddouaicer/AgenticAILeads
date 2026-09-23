@@ -130,7 +130,7 @@ prospects = [
      "person_name": "Rita Patel", "person_title": "Founder",
      "linkedin": "https://linkedin.com/in/ritapatel", "email": "",
      "location": "London, United Kingdom", "size": "8",
-     "source": "apollo", "niche_keywords": ""},           # niche via mandates
+     "source": "apollo", "niche_keywords": "java"},       # stated niche
     {"date_found": d(4), "agency": "TalentBridge Search",
      "person_name": "Marc Dubois", "person_title": "Managing Director",
      "linkedin": "https://linkedin.com/in/marcdubois", "email": "",

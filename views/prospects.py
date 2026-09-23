@@ -12,6 +12,7 @@ from datetime import date, datetime
 import streamlit as st
 
 import common as C
+import outreach
 from evidence import load_refreshes, verified_at
 from minilist_engine import (apply_sample_review, build_minilist, render_csv,
                              render_table, reviewable_rows, sample_row_id)
@@ -21,7 +22,8 @@ C.page_header("🧲 Prospects", "prospects")
 
 prospects = C.load_prospects()
 signals = C.load_prospect_signals()
-status = C.load_status(C.PROSPECTS_STATUS)
+status, raw_revisions = C.load_status(C.PROSPECTS_STATUS,
+                                      with_revisions=True)
 pcfg = C.load_prospects_config()
 
 # ---------------- engines (always available, incl. empty state) ----------------
@@ -181,51 +183,35 @@ mandates = {k: C.mandates_for_agency(p.get("agency", ""), signals)
             for k, p in by_key.items()}
 
 
+contexts = {}
+
+
+def context_for(k, p):
+    if k not in contexts:
+        contexts[k] = outreach.prospect_context(p, status.get(k) or {},
+                                                signals, pcfg)
+    return contexts[k]
+
+
 def niche_for(k, p):
-    """Priority: per-prospect override > live mandates > CSV column.
-
-    Mandates outrank the CSV deliberately. The niche_keywords column comes
-    from whatever list built the row — for the Clay import it was scraped
-    marketing copy, i.e. what an agency *claims* to place. Mandate titles
-    are what they are *actually working this week*. Evidence beats
-    advertising, so a prospect with live mandates gets a mini-list built
-    from those.
-
-    Derived keywords are specialisms only (see _NICHE_STOPWORDS): an
-    agency whose mandates are all "Software Engineer" derives nothing and
-    correctly falls through to the stated niche.
-    """
-    entry = status.get(k) or {}
-    if (entry.get("niche") or "").strip():
-        return C.parse_csv_line(entry["niche"]), "override"
-    derived = C.derive_niche_keywords(
-        [m.get("mandate_title", "") for m in mandates[k]])
-    if derived:
-        return derived, "derived from mandates"
-    if (p.get("niche_keywords") or "").strip():
-        return C.parse_csv_line(p["niche_keywords"]), "prospects.csv"
-    return [], "none"
+    context = context_for(k, p)
+    return context["niche"], context["niche_source"]
 
 
 def hook_for(k, p):
-    """A confirmed, recently checked posting or a stated-niche fallback."""
-    ms = mandates[k]
-    if ms:
-        m = ms[0]
-        loc = m.get("location", "")
-        return (f"saw your board advertising a {m.get('mandate_title', '')} "
-                "role" + (f" in {loc}" if loc else "")), "board posting"
-    kws, src = niche_for(k, p)
-    if kws:
-        return f"saw you specialize in {' / '.join(kws[:3])} placements", "niche"
-    return "", "none"
+    context = context_for(k, p)
+    return context["hook"], context["hook_source"]
 
 
 # ---------------- metrics ----------------
 
-today_iso = date.today().isoformat()
+queue = outreach.compute_queue(prospects, status, signals, pcfg, icp)
+for item in queue["followups"] + queue["new"]:
+    contexts[item["key"]] = item["context"]
+
+today_iso = outreach.local_now().date().isoformat()
 stage_of = {k: C.effective_status(status.get(k)) for k in by_key}
-n_due = sum(1 for k in by_key if C.followup_due(status.get(k)))
+n_due = len(queue["followups"]) + len(queue["blocked_followups"])
 touched = sum(1 for e in status.values()
               if e.get("on") == today_iso
               and e.get("status") in ("contacted", "replied", "call_booked",
@@ -293,22 +279,32 @@ if u and st.button(f"↩ Undo: {u['label']}", key="p_undo",
 
 # ---------------- cards ----------------
 
+def persist_draft(k, kind, widget_key, sample):
+    try:
+        outreach.save_draft(status, k, kind, st.session_state[widget_key],
+                            expected=raw_revisions.get(k, C.revision(None)),
+                            sample=sample)
+    except ConflictError:
+        st.session_state[f"draft_conflict_{k}"] = True
+    else:
+        st.session_state.pop(f"draft_conflict_{k}", None)
+
+
 def prospect_card(k, p, kind, i):
     """kind: 'fu' | 'new' | 'play'."""
     entry = status.get(k)
     eff = C.effective_status(entry)
-    due = C.followup_due(entry)
+    due = C.followup_due(entry, now=outreach.local_now())
     agency = p.get("agency", "?")
     person = p.get("person_name", "?")
     label = f"{person} @ {agency}"
-    hook, hook_src = hook_for(k, p)
-    kws, kw_src = niche_for(k, p)
-    ml_rows = (build_minilist(
-        kws, locations=C.market_tokens(p.get("location", "")), n=10,
-        state_file=C.STATE_FILE, contacts_file=C.CONTACTS_CACHE) if kws else [])
+    context = context_for(k, p)
+    hook, hook_src = context["hook"], context["hook_source"]
+    kws, kw_src = context["niche"], context["niche_source"]
+    ml_rows = context["sample_rows"]
     stored_review = (entry or {}).get("sample_review")
     sample_review = stored_review if isinstance(stored_review, dict) else {}
-    reviewed = apply_sample_review(ml_rows, sample_review)
+    reviewed = context["sample"]
 
     icon = {"fu": "🔁 ", "new": "🆕 ", "play": "💬 "}[kind]
     head = (f"{icon}{person} — {p.get('person_title', '?')}  [{agency}]"
@@ -321,6 +317,9 @@ def prospect_card(k, p, kind, i):
             f"found {p.get('date_found', '')}"] if x)
         if meta:
             st.caption(meta)
+        if kind == "new" and not C.matches_icp(p, icp):
+            st.warning("This prospect no longer matches the current criteria. "
+                       "Review the fit before sending.")
         lk = (p.get("linkedin") or "").strip()
         if lk:
             st.markdown(f"[open LinkedIn ↗]({lk})")
@@ -350,13 +349,54 @@ def prospect_card(k, p, kind, i):
                        + f" — last touch {(entry or {}).get('on', '?')}")
         else:
             tmpl = pcfg["dm_template"]
-        draft = C.render_prospect_dm(tmpl, p, hook, reviewed)
+        draft = context["draft"]
         template_invalid = draft.startswith("Template needs correction:")
+        draft_conflict = bool(st.session_state.get(f"draft_conflict_{k}"))
+        sample_claim = any(token in tmpl for token in
+                           ("{sample_count", "{contact_count",
+                            "{sample_summary"))
+        draft_widget_key = f"draft_{context['draft_kind']}_{k}"
+        if sample_claim:
+            draft_widget_key += f"_{C.revision(reviewed)[:8]}"
+        included_sample = False
         if kind != "play":
             if template_invalid:
                 st.error(draft)
             else:
-                st.code(draft, language=None)
+                if context["draft_sample_changed"]:
+                    st.info("The reviewed sample changed. Check the updated "
+                            "message before sending.")
+                draft = st.text_area("Final message", value=draft,
+                                     key=draft_widget_key,
+                                     height=150, on_change=persist_draft,
+                                     args=(k, context["draft_kind"],
+                                           draft_widget_key, reviewed))
+                if draft_conflict:
+                    st.error("This prospect changed in another session. Reload and review your draft.")
+                if st.button("Save draft", key=f"save_draft_{k}"):
+                    try:
+                        outreach.save_draft(
+                            status, k, context["draft_kind"], draft,
+                            expected=raw_revisions.get(k, C.revision(None)),
+                            sample=reviewed)
+                    except ConflictError:
+                        st.error("This prospect changed in another session. Reload and edit again.")
+                    else:
+                        st.session_state.pop(f"draft_conflict_{k}", None)
+                        st.success("Draft saved.")
+                        st.rerun()
+                if (p.get("linkedin") or "").strip() and "@" in (p.get("email") or ""):
+                    channel = st.selectbox("Send channel", ["linkedin", "email"],
+                                           key=f"send_channel_{k}")
+                else:
+                    channel = context["channel"]
+                if reviewed:
+                    included_sample = st.checkbox(
+                        "I included the reviewed sample with this message",
+                        value=False, key=f"included_sample_{k}")
+                    if sample_claim and not included_sample:
+                        st.caption("Confirm the reviewed sample was included "
+                                   "before recording this message.")
 
         # niche keywords + one-click mini-list (the door-opener)
         nc1, nc2 = st.columns([3, 1], vertical_alignment="bottom")
@@ -434,7 +474,7 @@ def prospect_card(k, p, kind, i):
                                 C.update_status_fields(
                                     status, k, {"sample_review": value},
                                     C.PROSPECTS_STATUS,
-                                    expected=C.status_revision(status, k))
+                                    expected=raw_revisions.get(k, C.revision(None)))
                             except ConflictError:
                                 st.error("This prospect changed in another "
                                          "session. Reload and review again.")
@@ -477,12 +517,20 @@ def prospect_card(k, p, kind, i):
             with b1:
                 if st.button("🔁 Followed up", key=f"pfu_{k}",
                              type="primary", width="stretch",
-                             disabled=template_invalid,
-                             help="Logs the follow-up and resets the "
+                             disabled=(template_invalid or draft_conflict or
+                                       (sample_claim and not included_sample)),
+                             help="Records the final message and resets the "
                                   f"{C.FOLLOWUP_DAYS}-day timer."):
-                    C.mark_followed_up(status, k, label,
-                                       path=C.PROSPECTS_STATUS)
-                    st.rerun()
+                    try:
+                        C.record_prospect_send(status, k, message=draft,
+                                               sample=reviewed if included_sample else [],
+                                               channel=channel,
+                                               lead_label=label,
+                                               expected=raw_revisions.get(k, C.revision(None)))
+                    except (ConflictError, ValueError) as error:
+                        st.error(str(error))
+                    else:
+                        st.rerun()
             with b2:
                 if st.button("💬 They replied", key=f"prp_{k}",
                              width="stretch",
@@ -495,12 +543,20 @@ def prospect_card(k, p, kind, i):
             with b1:
                 if st.button("✅ Sent — mark contacted", key=f"pct_{k}",
                              type="primary", width="stretch",
-                             disabled=template_invalid,
-                             help="Click after you actually sent the DM — "
-                                  "starts the follow-up timer."):
-                    C.set_stage(status, k, "contacted", lead_label=label,
-                                path=C.PROSPECTS_STATUS)
-                    st.rerun()
+                             disabled=(template_invalid or draft_conflict or
+                                       (sample_claim and not included_sample)),
+                             help="Click after sending. Stores this exact "
+                                  "message and approved sample."):
+                    try:
+                        C.record_prospect_send(status, k, message=draft,
+                                               sample=reviewed if included_sample else [],
+                                               channel=channel,
+                                               lead_label=label,
+                                               expected=raw_revisions.get(k, C.revision(None)))
+                    except (ConflictError, ValueError) as error:
+                        st.error(str(error))
+                    else:
+                        st.rerun()
             with b2:
                 if st.button("🚫 Dismiss", key=f"pdx_{k}", width="stretch",
                              help="Bad fit / wrong person — out of the "
@@ -534,55 +590,27 @@ def prospect_card(k, p, kind, i):
                     st.rerun()
 
 
-due_list = [(k, p) for k, p in by_key.items()
-            if C.followup_due(status.get(k))]
-new_list = [(k, p) for k, p in by_key.items() if stage_of[k] == "new"]
-
-# Ranking order comes from build_today.py when it has run today. That
-# script does the expensive part — geo-matched gifts, contact counts, the
-# small/bulk split — and it can run from Task Scheduler. Keeping the page
-# a reader means the ranking can get smarter (days_open, reply-rate
-# feedback) without touching this file.
-#
-# When today.json is missing or stale we fall back to a cheap live sort,
-# so the page is never blocked on a script having run.
-_today = {}
-_today_file = C.DATA_DIR / "today.json"
-if _today_file.exists():
-    try:
-        import json as _j
-        _d = _j.loads(_today_file.read_text(encoding="utf-8"))
-        if _d.get("date") == date.today().isoformat():
-            _today = {it["key"]: n for n, it in enumerate(_d.get("items", []))}
-            _ranked_by = f"build_today.py ({len(_d.get('items', []))} queued)"
-    except (ValueError, KeyError):
-        _today = {}
-
-if _today:
-    new_list.sort(key=lambda kp: _today.get(kp[0], 10_000))
-else:
-    _ranked_by = "live sort (run build_today.py for the full ranking)"
-    # best first: has a mandate hook > has any mandates > recency
-    new_list.sort(key=lambda kp: (hook_for(kp[0], kp[1])[1] == "mandate",
-                                  bool(mandates[kp[0]]),
-                                  kp[1].get("date_found", "")), reverse=True)
-play_list = [(k, p) for k, p in by_key.items()
-             if stage_of[k] in ("replied", "call_booked")]
+due_list = [(item["key"], item["prospect"]) for item in queue["followups"]]
+new_list = [(item["key"], item["prospect"]) for item in queue["new"]]
+play_list = [(item["key"], item["prospect"]) for item in queue["replies"]]
 
 # ---------------- the three zoom levels ----------------
 # Today, In play and All are the same data at three distances, so they are
 # tabs on one page rather than three pages. Today is first because it is
 # the only one you open every day.
-n_today = len(play_list) + len(due_list) + min(
-    len(new_list), max(C.DAILY_QUEUE_CAP - len(due_list), 0))
+n_today = len(play_list) + n_due + len(new_list)
 tab_today, tab_all = st.tabs(
     [f"📮 Today ({n_today})", f"📋 All ({len(by_key)})"])
 
 # ---------------- Today: the daily driver ----------------
 with tab_today:
     st.caption(
-        f"Replies first, then follow-ups, then new sends (capped at "
-        f"{C.DAILY_QUEUE_CAP}/day). Ranked by: {_ranked_by}.")
+        f"Replies first, then follow-ups, then new sends. "
+        f"{queue['remaining_initial']} of {queue['budget']} initial sends "
+        "remain today. Follow-ups do not use that budget.")
+    if queue["legacy_counts_incomplete"]:
+        st.caption("Older contacts have no action history, so historical "
+                   "send counts may be incomplete.")
 
     # Live conversations sit at the TOP, not in a tab you have to remember
     # to click. One unanswered reply is worth more than twenty sends, so
@@ -598,19 +626,30 @@ with tab_today:
         st.markdown(f"**🔁 Follow-ups due ({len(due_list)})**")
         for i, (k, p) in enumerate(due_list):
             prospect_card(k, p, "fu", i)
-    else:
+    elif not queue["blocked_followups"]:
         st.caption("No follow-ups due.")
+    if queue["blocked_followups"]:
+        st.markdown(f"**🔁 Follow-ups needing correction "
+                    f"({len(queue['blocked_followups'])})**")
+        for item in queue["blocked_followups"]:
+            p = item["prospect"]
+            st.warning(f"{p.get('person_name', 'Unknown')} @ "
+                       f"{p.get('agency', 'Unknown')}: "
+                       + "; ".join(item["reasons"]))
 
-    room = max(C.DAILY_QUEUE_CAP - len(due_list), 0)
-    st.markdown(f"**🆕 New prospects — showing {min(room, len(new_list))} "
-                f"of {len(new_list)}**")
-    if not new_list:
-        st.caption("No new prospects — run the Prospector above.")
-    elif not room:
-        st.caption(f"Daily cap ({C.DAILY_QUEUE_CAP}) already filled by "
-                   "follow-ups. Come back tomorrow, or work the In play tab.")
+    st.markdown(f"**🆕 New prospects — showing {len(new_list)} "
+                f"of {queue['new_available']} eligible**")
+    if not new_list and not prospects:
+        st.caption("No prospects yet — import or find an agency.")
+    elif not new_list and not queue["remaining_initial"]:
+        st.caption("Today's initial-send budget is used. Follow-ups remain available.")
+    elif not new_list and queue["blocked"]:
+        st.caption(f"{len(queue['blocked'])} prospect(s) need a usable contact "
+                   "or supported opener. Review them in All.")
+    elif not new_list:
+        st.caption("No new prospects are eligible today.")
     else:
-        for i, (k, p) in enumerate(new_list[:room]):
+        for i, (k, p) in enumerate(new_list):
             prospect_card(k, p, "new", i)
 
 # ---------------- All: the full table ----------------
@@ -634,14 +673,63 @@ with tab_all:
             "person": p.get("person_name", ""),
             "title": p.get("person_title", ""),
             "stage": stage_of[k].replace("_", " ")
-                     + (" · follow-up due" if C.followup_due(entry) else ""),
+                     + (" · follow-up due" if C.followup_due(
+                         entry, now=outreach.local_now()) else ""),
             "since": entry.get("on", ""),
             "mandates": len(mandates[k]),
             "location": p.get("location", ""),
             "linkedin": p.get("linkedin", ""),
             "notes": entry.get("notes", ""),
+            "next_step": "; ".join(
+                queue["blocked"].get(k, [])
+                + (["Review against current criteria"]
+                   if not C.matches_icp(p, icp) else [])),
         })
     st.caption(f"{len(rows)} of {len(by_key)} prospect(s)")
     st.dataframe(rows, width="stretch", height=420, hide_index=True,
                  column_config={
                      "linkedin": st.column_config.LinkColumn("linkedin")})
+    selected_key = st.selectbox(
+        "Inspect prospect history", list(by_key),
+        format_func=lambda key: (f"{by_key[key].get('person_name', '')} @ "
+                                 f"{by_key[key].get('agency', '')}"),
+        key="prospect_history_key")
+    with st.expander("Correct prospect identity or contact"):
+        selected = by_key[selected_key]
+        corrected_name = st.text_input(
+            "Person name", selected.get("person_name", ""),
+            key=f"correct_name_{selected_key}")
+        corrected_linkedin = st.text_input(
+            "LinkedIn URL", selected.get("linkedin", ""),
+            key=f"correct_linkedin_{selected_key}")
+        corrected_email = st.text_input(
+            "Email", selected.get("email", ""),
+            key=f"correct_email_{selected_key}")
+        if st.button("Save correction", key=f"correct_save_{selected_key}"):
+            try:
+                C.correct_prospect_identity(
+                    selected_key,
+                    {"person_name": corrected_name,
+                     "linkedin": corrected_linkedin,
+                     "email": corrected_email},
+                    expected=C.prospect_row_revision(selected))
+            except (ConflictError, ValueError) as error:
+                st.error(str(error))
+            else:
+                st.success("Correction saved; prospect history stays attached.")
+                st.rerun()
+    actions = (status.get(selected_key) or {}).get("activity") or []
+    if actions:
+        for action in reversed(actions):
+            with st.expander(f"{action.get('type', 'action')} · "
+                             f"{action.get('at', 'unknown time')} · "
+                             f"{action.get('channel', '')}"):
+                st.caption(f"Recorded by {action.get('operator', 'unknown')}")
+                st.code(action.get("message", ""), language=None)
+                sample = action.get("sample") or []
+                st.caption(f"{len(sample)} reviewed sample row(s) sent")
+                if sample:
+                    st.dataframe(sample, hide_index=True, width="stretch")
+    else:
+        st.caption("No recorded sends for this prospect. Older stage-only "
+                   "entries cannot reconstruct a past message.")

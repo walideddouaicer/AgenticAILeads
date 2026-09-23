@@ -141,9 +141,8 @@ with section("queue", "🚀 Page guide — Outreach Queue"):
 Your daily working view. **Do follow-ups first, then new sends.**
 
 - **Client** — work one client's queue or all.
-- **Daily cap (new sends)** — max new leads queued today (default
-  {C.DAILY_QUEUE_CAP}; LinkedIn-safe is ~15/day, 100–150 connection
-  requests/week).
+- **Daily cap (new sends)** — the operator's chosen daily target (default
+  {C.DAILY_QUEUE_CAP}), not a platform-guaranteed safe limit.
 - **🎯 Focus mode** — one card at a time with a *send X of Y* progress
   bar; any action advances to the next card. **Skip →** cycles a card to
   the back without recording anything.

@@ -1,7 +1,7 @@
 # Implementation status
 
 Updated: 23 September 2026. Scope: Phase 0 baseline, Phase 1 persistence,
-and Phase 2 evidence/sample correctness.
+Phase 2 evidence/sample correctness, and Phase 3 queue/actions.
 
 ## Checkpoints
 
@@ -16,14 +16,16 @@ and Phase 2 evidence/sample correctness.
 - `5437e4b` — `Unify niche and location matching rules gbt 7.0`.
 - `08532f9` — `Track verified board evidence and confirmed sample identities gbt 8.0`.
 - Phase 2 sample review checkpoint: `Review and approve sample rows before export gbt 9.0`.
-  Its hash is reported with the commit. Next suffix after it: `gbt 10.0`.
+  Hash: `b34a886`.
+- Phase 3 queue and send-history checkpoint: `Unify outreach queue and record manual sends gbt 10.0`.
+  Its hash is reported with the commit. Next suffix after it: `gbt 11.0`.
 
 | Phase | Status |
 |---|---|
 | 0 — baseline, environment, instructions | Complete at the first numbered checkpoint |
 | 1 — persistence and process execution | Complete through `gbt 6.0` |
 | 2 — evidence and sample correctness | Implemented offline through `gbt 9.0`; live compatibility still unverified |
-| 3 — unified queue and durable actions | Not started |
+| 3 — unified queue and durable actions | Implemented offline through `gbt 10.0` |
 | 4 — interface consolidation | Not started |
 | 5 — minimum client delivery | Not started |
 | 6 — dead paths and documentation | Not started |
@@ -187,9 +189,50 @@ on Windows. No live ATS/provider request, outreach, deployment, push or
 scheduler action was made. Live ATS shape and provider access still require
 separate read-only/operator-initiated checks later in the plan.
 
+## Phase 3 result
+
+- `outreach.py` now supplies one Streamlit-free queue and prospect context to
+  both the page and `build_today.py`. The `today.json` file is a derived export;
+  missing or old copies do not change page eligibility. The old small/bulk
+  split, compulsory ten-company/ten-contact thresholds and fallback page sort
+  are removed from active acquisition decisions. LinkedIn-only prospects can
+  qualify without email; missing contact, identity, opener or valid message
+  produces an explicit correction reason. Current ICP mismatches stay visible
+  for review.
+- Replies appear first, then due follow-ups, then eligible first sends.
+  First sends consume the configured daily budget once, under the same file
+  lock used for status changes. Follow-ups do not consume it. The business
+  day uses `AAL_BUSINESS_TIMEZONE` (default UTC); the count survives app restarts.
+  Older stage-only entries remain readable, but historical counts may be
+  incomplete and are labeled that way.
+- Editing a draft saves it in the prospect status; the page also offers an
+  explicit Save draft action. Recording an actual manual send stores an action
+  ID, UTC timestamp, operator, channel, exact final message and the reviewed
+  sample the operator confirms was included. A duplicate action ID is harmless.
+  Sends and draft edits reject stale record revisions. Undo restores only the
+  last eligible record when its revision still matches. All prospects expose
+  recorded send history; legacy status entries never invent old messages.
+  Sample-count drafts regenerate when the reviewed sample changes.
+- Prospect name/LinkedIn corrections are written under the CSV lock. A new
+  derived key is aliased to the original status key before the CSV changes, so
+  existing send history and stage remain attached. An interrupted correction
+  is replayed from a pending checkpoint before prospects are read again.
+- Both Phase 3 expected-failure markers were removed after their assertions
+  passed: builder/page now recommend the same new prospect, and after one of
+  15 first sends the page shows 14 remaining cards. Additional offline checks
+  cover LinkedIn-only eligibility, missing sample claims, exact send snapshots,
+  duplicate actions, follow-up counting, local midnight, stale edits, legacy
+  status revisions and identity correction. The full isolated suite passed on
+  Windows Python 3.12.14. No live source/provider request, outreach, push,
+  deployment or scheduler action was made.
+
+Additive data: `activity`, `drafts` and `draft_sample_fingerprints` on prospect
+status entries, and
+`prospect_key_aliases.json` and `prospect_identity_pending.json` for identity
+corrections. Existing operational
+data was not migrated in this checkout.
+
 ## Next phase
 
-Phase 3: one queue decision path, durable final message/sample actions and
-initial-send budget. Keep both existing expected-failure regressions until
-their behavior is fixed; then remove each expected-failure marker and retain
-the assertion.
+Phase 4: consolidate the interface into Prospects, Clients, Signals and
+Settings; provide the ordinary import/edit/review path without terminal edits.
