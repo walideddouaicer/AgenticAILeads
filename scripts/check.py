@@ -87,6 +87,7 @@ def main():
                     ("engine-storage", ["tests/test_engine_storage.py"]),
                     ("matching", ["tests/test_matching.py"]),
                     ("evidence", ["tests/test_evidence.py"]),
+                    ("sample-review-page", ["tests/test_sample_review_page.py"]),
                     ("delivery", ["tests/test_delivery.py"]),
                     ("pages", ["tests/test_pages.py"]),
                     ("workflow-gaps", ["tests/test_workflow_gaps.py"])]

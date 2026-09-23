@@ -1,6 +1,7 @@
 # Implementation status
 
-Updated: 22 September 2026. Scope: Phase 0 baseline and Phase 1 persistence/process safety.
+Updated: 23 September 2026. Scope: Phase 0 baseline, Phase 1 persistence,
+and Phase 2 evidence/sample correctness.
 
 ## Checkpoints
 
@@ -11,14 +12,17 @@ Updated: 22 September 2026. Scope: Phase 0 baseline and Phase 1 persistence/proc
 - `648d649` — `Make app state updates conflict-safe gbt 3.0`.
 - `6289e47` — `Unify engine execution and process locking gbt 4.0`.
 - `5e213af` — `Make sweep output batches crash recoverable gbt 5.0`.
-- Next implementation commit suffix after the Phase 1 completion checkpoint:
-  `gbt 7.0` (verify Git history).
+- `a6760f7` — `Complete safe engine persistence and runtime paths gbt 6.0`.
+- `5437e4b` — `Unify niche and location matching rules gbt 7.0`.
+- `08532f9` — `Track verified board evidence and confirmed sample identities gbt 8.0`.
+- Phase 2 sample review checkpoint: `Review and approve sample rows before export gbt 9.0`.
+  Its hash is reported with the commit. Next suffix after it: `gbt 10.0`.
 
 | Phase | Status |
 |---|---|
 | 0 — baseline, environment, instructions | Complete at the first numbered checkpoint |
 | 1 — persistence and process execution | Complete through `gbt 6.0` |
-| 2 — evidence and sample correctness | Next |
+| 2 — evidence and sample correctness | Implemented offline through `gbt 9.0`; live compatibility still unverified |
 | 3 — unified queue and durable actions | Not started |
 | 4 — interface consolidation | Not started |
 | 5 — minimum client delivery | Not started |
@@ -130,8 +134,62 @@ The two Phase 3 regressions remain expected failures: queue eligibility differs
 between builder and page, and today's initial-send budget does not decrease.
 No live network/provider request, message, deployment or scheduler change ran.
 
+## Phase 2 result
+
+- `gbt 7.0` unified niche and geography matching. Java/JavaScript, `.NET`, C++,
+  technical phrases, remote versus market, ambiguous locations and the old
+  open-role-count size proxy are covered by behavioral checks.
+- Both sweep engines validate complete ATS job lists before replacing snapshots.
+  A malformed response, 404 or request failure leaves the prior state/history
+  intact; a valid empty response closes prior jobs. Each attempted board check
+  writes its result and UTC timestamp after the recoverable sweep batch commits.
+  Jobs carry their successful observation timestamp. Current claims require
+  matching job and board timestamps, a successful latest check and age at most
+  48 hours. This is an operational default, not a validated market threshold.
+- Agency discovery saves suggestions separately. A confirmed agency-board
+  mapping and current posting are required for an agency posting hook. New
+  prospect signal rows store `platform:token` in the existing `agency` column;
+  legacy token-only rows remain readable but cannot be linked ambiguously.
+  Advertised roles are described literally rather than as newly won mandates.
+- Employer samples keep platform/board identity and only group boards after
+  their company domain is explicitly confirmed. Legacy company-keyed contacts
+  attach only through a confirmed mapping; manual contacts entered on a lead
+  stay with its exact board. Provider lookups target confirmed, recently checked
+  sample companies, retry empty results after a bounded interval, and preserve
+  manual contact corrections on refresh.
+- Sample rows expose source board, posting URL, verification time, identity
+  status and actual named-contact coverage. Unsupported fixed volume/contact
+  promises were removed from generated copy and active help text. CSV output
+  escapes spreadsheet formulas; HTML output escapes text and rejects non-HTTP
+  links. Prospect and standalone sample screens require the operator to approve
+  eligible rows before export; prospect approvals and output corrections persist
+  in `prospects_status.json`. The original role/location remain alongside any
+  corrected output. Approved sample counts can populate message templates;
+  missing sample fields show a correction state instead of a raw placeholder.
+
+Additive data: `board_refresh.json`, `agency_board_refresh.json`,
+`agency_board_suggestions.json`, `agency_board_mappings.json`,
+`company_board_mappings.json`, `contact_lookup_status.json`, `observed_at` on
+stored jobs, and `sample_review` on prospect status entries. Existing data was
+not rewritten in the working checkout. No mappings or current observations were
+invented for previously tracked boards; those require an operator check and
+confirmation.
+
+Verification: the isolated runner passed offline guard, syntax, bare app,
+units, storage, runner, sweep recovery, engine storage, matching, evidence,
+sample-review page interaction, mocked delivery and all existing page checks.
+The two Phase 3 workflow gaps remain expected failures with the same observed
+builder/page and budget disagreements. These runs used Windows with Python
+3.12.14 and pinned package versions because the requested Linux path and
+Python 3.13.15 environment are not available in this checkout. The runner
+blocks external connections while allowing local sockets needed by Streamlit
+on Windows. No live ATS/provider request, outreach, deployment, push or
+scheduler action was made. Live ATS shape and provider access still require
+separate read-only/operator-initiated checks later in the plan.
+
 ## Next phase
 
-Implement Phase 2: evidence freshness, confirmed board identities, one correct
-niche/location matcher, contact association and correction-safe enrichment, and
-sample/copy claims derived from the reviewed rows. Continue with `gbt 7.0`.
+Phase 3: one queue decision path, durable final message/sample actions and
+initial-send budget. Keep both existing expected-failure regressions until
+their behavior is fixed; then remove each expected-failure marker and retain
+the assertion.

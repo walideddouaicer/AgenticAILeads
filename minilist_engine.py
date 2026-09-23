@@ -18,6 +18,7 @@ Also imported by app.py (Mini-List tab).
 
 import argparse
 import csv
+import hashlib
 import html
 import io
 import re
@@ -196,6 +197,48 @@ def build_minilist(keywords, locations=None, exclusions=None, n=DEFAULT_N,
     return rows[:n]
 
 
+CORRECTABLE_FIELDS = ("company", "hiring_now", "location", "contact_name",
+                      "contact_title", "contact_linkedin", "contact_email")
+
+
+def sample_row_id(row):
+    """Stable within a source posting; a changed URL needs a new review."""
+    source = (f"{row.get('source_board', '')}|"
+              f"{row.get('job_url') or (row.get('hiring_now', '') + '|' + row.get('location', ''))}")
+    return hashlib.sha256(source.encode("utf-8")).hexdigest()[:16]
+
+
+def reviewable_rows(rows):
+    """Current evidence with confirmed employer identity only."""
+    return [row for row in rows if row.get("verified_at")
+            and row.get("identity_status") == "confirmed"]
+
+
+def apply_sample_review(rows, review):
+    """Return only approved rows with output corrections, never alter source."""
+    review = review if isinstance(review, dict) else {}
+    approved = set(review.get("approved") or [])
+    corrections = review.get("corrections") or {}
+    out = []
+    for row in reviewable_rows(rows):
+        row_id = sample_row_id(row)
+        if row_id not in approved:
+            continue
+        updated = dict(row)
+        updated["source_title"] = row.get("hiring_now", "")
+        updated["source_location"] = row.get("location", "")
+        change = corrections.get(row_id, {})
+        if isinstance(change, dict):
+            for field in CORRECTABLE_FIELDS:
+                if field in change:
+                    updated[field] = str(change[field]).strip()
+        updated["contact_coverage"] = (
+            "named contact" if updated.get("contact_name") else "no named contact")
+        updated["review_note"] = "operator corrected" if change else "approved"
+        out.append(updated)
+    return out
+
+
 def render_table(rows, limit: int = 10) -> str:
     """Plain-text table for pasting straight into a DM or email body.
 
@@ -216,6 +259,9 @@ def render_table(rows, limit: int = 10) -> str:
         line += (f"\n  Source: {r.get('source_board', 'unknown')} · "
                  f"checked: {r.get('verified_at') or 'unverified'} · "
                  f"{r.get('identity_status', 'identity unconfirmed')}")
+        if r.get("review_note") == "operator corrected":
+            line += (f"\n  Output corrected; source role: "
+                     f"{r.get('source_title', '')}")
         if r.get("contact_name"):
             line += f"\n  → {r['contact_name']}"
             if r.get("contact_title"):
@@ -276,6 +322,9 @@ def render_html(prospect: str, rows, pitch: str = DEFAULT_PITCH) -> str:
         evidence = (f'{e(r.get("source_board", "unknown"))}<br>'
                     f'<span class="sub">{e(r.get("verified_at") or "refresh required")}'
                     f' · {e(r.get("identity_status", "unconfirmed"))}</span>')
+        if r.get("review_note") == "operator corrected":
+            evidence += (f'<br><span class="sub">Output corrected; source role: '
+                         f'{e(r.get("source_title", ""))}</span>')
         trs.append(
             f'<tr><td class="n">{i:02d}</td>'
             f'<td class="co">{e(r["company"])}</td>'

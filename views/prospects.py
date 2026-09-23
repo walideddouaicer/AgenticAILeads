@@ -13,8 +13,9 @@ import streamlit as st
 
 import common as C
 from evidence import load_refreshes, verified_at
-from minilist_engine import build_minilist, render_csv, render_table
-from storage import read_json
+from minilist_engine import (apply_sample_review, build_minilist, render_csv,
+                             render_table, reviewable_rows, sample_row_id)
+from storage import ConflictError, read_json
 
 C.page_header("🧲 Prospects", "prospects")
 
@@ -301,6 +302,13 @@ def prospect_card(k, p, kind, i):
     person = p.get("person_name", "?")
     label = f"{person} @ {agency}"
     hook, hook_src = hook_for(k, p)
+    kws, kw_src = niche_for(k, p)
+    ml_rows = (build_minilist(
+        kws, locations=C.market_tokens(p.get("location", "")), n=10,
+        state_file=C.STATE_FILE, contacts_file=C.CONTACTS_CACHE) if kws else [])
+    stored_review = (entry or {}).get("sample_review")
+    sample_review = stored_review if isinstance(stored_review, dict) else {}
+    reviewed = apply_sample_review(ml_rows, sample_review)
 
     icon = {"fu": "🔁 ", "new": "🆕 ", "play": "💬 "}[kind]
     head = (f"{icon}{person} — {p.get('person_title', '?')}  [{agency}]"
@@ -342,7 +350,7 @@ def prospect_card(k, p, kind, i):
                        + f" — last touch {(entry or {}).get('on', '?')}")
         else:
             tmpl = pcfg["dm_template"]
-        draft = C.render_prospect_dm(tmpl, p, hook)
+        draft = C.render_prospect_dm(tmpl, p, hook, reviewed)
         template_invalid = draft.startswith("Template needs correction:")
         if kind != "play":
             if template_invalid:
@@ -351,7 +359,6 @@ def prospect_card(k, p, kind, i):
                 st.code(draft, language=None)
 
         # niche keywords + one-click mini-list (the door-opener)
-        kws, kw_src = niche_for(k, p)
         nc1, nc2 = st.columns([3, 1], vertical_alignment="bottom")
         with nc1:
             niche_in = st.text_input(
@@ -370,29 +377,86 @@ def prospect_card(k, p, kind, i):
                 st.rerun()
 
         if kws:
-            # Geo-matched to the prospect's market — see core.market_tokens.
-            ml_rows = build_minilist(kws,
-                                     locations=C.market_tokens(
-                                         p.get("location", "")),
-                                     n=10, state_file=C.STATE_FILE,
-                                     contacts_file=C.CONTACTS_CACHE)
             if ml_rows:
                 n_contact = sum(1 for r in ml_rows if r["contact_name"])
                 current = sum(1 for r in ml_rows if r.get("verified_at"))
                 st.caption(f"🎁 Sample: **{len(ml_rows)} board/company rows**, "
                            f"{current} checked within 48 hours, "
-                           f"{n_contact} with named contacts. Review each "
-                           "source before sending.")
+                           f"{n_contact} with named contacts; "
+                           f"{len(reviewed)} approved for export.")
+                eligible = reviewable_rows(ml_rows)
+                with st.popover("Review and correct sample"):
+                    st.caption("Open each source before approval. Stale or "
+                               "unconfirmed boards remain visible above but "
+                               "cannot enter the export.")
+                    st.dataframe(ml_rows, width="stretch", hide_index=True)
+                    if eligible:
+                        by_id = {sample_row_id(row): row for row in eligible}
+                        options = list(by_id)
+                        chosen = st.multiselect(
+                            "Approve rows", options,
+                            default=[row_id for row_id in
+                                     sample_review.get("approved", [])
+                                     if row_id in by_id],
+                            format_func=lambda row_id: (
+                                f"{by_id[row_id]['company']} — "
+                                f"{by_id[row_id]['hiring_now']} "
+                                f"[{by_id[row_id]['source_board']}]"),
+                            key=f"sample_approved_{k}")
+                        selected_id = st.selectbox(
+                            "Correct one row's output", options,
+                            format_func=lambda row_id: (
+                                f"{by_id[row_id]['company']} — "
+                                f"{by_id[row_id]['hiring_now']}"),
+                            key=f"sample_correct_{k}")
+                        source = by_id[selected_id]
+                        prior = sample_review.get("corrections", {}).get(
+                            selected_id, {})
+                        corrected = {}
+                        for field, title in (("company", "Company label"),
+                                             ("hiring_now", "Role title"),
+                                             ("location", "Location"),
+                                             ("contact_name", "Contact name")):
+                            corrected[field] = st.text_input(
+                                title, prior.get(field, source.get(field, "")),
+                                key=f"sample_{field}_{k}_{selected_id}")
+                        if st.button("Save reviewed sample", key=f"sample_save_{k}"):
+                            changes = dict(sample_review.get("corrections") or {})
+                            delta = {field: value.strip()
+                                     for field, value in corrected.items()
+                                     if value.strip() != str(source.get(field, "")).strip()}
+                            if delta:
+                                changes[selected_id] = delta
+                            else:
+                                changes.pop(selected_id, None)
+                            value = {"approved": chosen, "corrections": changes}
+                            try:
+                                C.update_status_fields(
+                                    status, k, {"sample_review": value},
+                                    C.PROSPECTS_STATUS,
+                                    expected=C.status_revision(status, k))
+                            except ConflictError:
+                                st.error("This prospect changed in another "
+                                         "session. Reload and review again.")
+                            else:
+                                st.success("Reviewed sample saved.")
+                                st.rerun()
+                    else:
+                        st.warning("Refresh a matching board and confirm its "
+                                   "company identity before approving rows.")
                 slug = "".join(c if c.isalnum() else "-"
                                for c in agency.lower()).strip("-") or "prospect"
                 fname = f"minilist_{slug}_{date.today().isoformat()}"
-                st.code(render_table(ml_rows), language=None)
+                if reviewed:
+                    st.code(render_table(reviewed), language=None)
+                else:
+                    st.info("No approved sample rows yet. Review the source "
+                            "and save an approval above.")
                 st.download_button(
-                    "⬇ Mini-list CSV", render_csv(ml_rows),
+                    "⬇ Reviewed sample CSV", render_csv(reviewed),
                     file_name=f"{fname}.csv", mime="text/csv",
-                    key=f"mlc_{k}", width="stretch",
-                    help="Only if they ask for the full list — the table "
-                         "above is what goes in the message.")
+                    key=f"mlc_{k}", width="stretch", disabled=not reviewed,
+                    help="Exports only approved rows and keeps source proof.")
             else:
                 st.caption("No tracked jobs match these niche keywords — "
                            "widen them or grow the client watchlist.")

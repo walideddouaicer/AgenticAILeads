@@ -187,6 +187,32 @@ def test_unknown_template_field_requires_correction():
     assert "{unavailable_field}" not in rendered
 
 
+def test_review_controls_export_and_template_counts():
+    at = datetime(2026, 9, 23, tzinfo=timezone.utc).isoformat()
+    row = {"company": "Acme", "hiring_now": "Java Engineer",
+           "location": "London", "job_url": "https://jobs.test/1",
+           "source_board": "greenhouse:acme", "verified_at": at,
+           "identity_status": "confirmed", "contact_name": "Jane"}
+    row_id = minilist_engine.sample_row_id(row)
+    assert minilist_engine.apply_sample_review([row], {}) == []
+    reviewed = minilist_engine.apply_sample_review([row], {
+        "approved": [row_id],
+        "corrections": {row_id: {"hiring_now": "Senior Java Engineer"}}})
+    assert len(reviewed) == 1
+    assert reviewed[0]["hiring_now"] == "Senior Java Engineer"
+    assert reviewed[0]["source_title"] == "Java Engineer"
+    assert row["hiring_now"] == "Java Engineer"
+    assert "source_title" in minilist_engine.render_csv(reviewed)
+    message = core.render_prospect_dm(
+        "{sample_count} roles, {contact_count} contacts", {}, "", reviewed)
+    assert message == "1 roles, 1 contacts"
+    assert core.render_prospect_dm("{sample_count} roles", {}, "").startswith(
+        "Template needs correction:")
+    stale = {**row, "verified_at": ""}
+    assert minilist_engine.apply_sample_review(
+        [stale], {"approved": [row_id]}) == []
+
+
 def test_contact_lookup_retries_and_keeps_manual_corrections():
     now = datetime(2026, 9, 23, tzinfo=timezone.utc)
     manual = [{"name": "Correct Name", "title": "Head of Talent",

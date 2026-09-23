@@ -767,7 +767,7 @@ def save_prospects_config(cfg):
     atomic_write_json(PROSPECTS_CONFIG, cfg, indent=2)
 
 
-def render_prospect_dm(template, prospect, hook):
+def render_prospect_dm(template, prospect, hook, sample_rows=None):
     contact = prospect.get("person_name", "")
     first = contact.split()[0] if contact else "there"
     fields = {
@@ -777,6 +777,20 @@ def render_prospect_dm(template, prospect, hook):
         "person_title": prospect.get("person_title", ""),
         "location": prospect.get("location", ""),
     }
+    sample_rows = list(sample_rows or [])
+    n_contacts = sum(bool(row.get("contact_name")) for row in sample_rows)
+    fields.update({
+        "sample_count": len(sample_rows),
+        "contact_count": n_contacts,
+        "sample_summary": (f"{len(sample_rows)} reviewed job-board "
+                           f"example(s), {n_contacts} with named contacts")
+        if sample_rows else "",
+    })
+    if not sample_rows and any(token in str(template) for token in
+                               ("{sample_count", "{contact_count",
+                                "{sample_summary")):
+        return ("Template needs correction: approve a current sample "
+                "before using sample placeholders.")
     try:
         return template.format(**fields)
     except (KeyError, IndexError, ValueError):
