@@ -8,12 +8,13 @@ from streamlit import runtime
 
 import auth
 import common as C
+import core
 
 
 def main():
     st.set_page_config(page_title="Agentic AI Leads", page_icon="⚡",
                        layout="wide")
-    C.CONFIG_DIR.mkdir(exist_ok=True)
+    core.CONFIG_DIR.mkdir(exist_ok=True)
     C.inject_css()
     C.flush_toasts()
     auth.require_login()

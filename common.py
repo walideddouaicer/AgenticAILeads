@@ -2,84 +2,36 @@
 """
 Agentic AI Leads — Streamlit glue for the CRM.
 
-This module is now the UI half only: theme/CSS, toasts and undo, the
-manual-contact editor, the engine subprocess runner, the sidebar and page
-headers. All domain logic — paths, constants, the lead and prospect
-stores, the stage machine, follow-up rules, DM rendering, the watchlist —
-moved to core.py, which imports no Streamlit and can therefore be used by
-scheduled jobs and CLI tools.
+This module contains UI helpers: theme/CSS, toasts and undo, the manual
+contact editor, engine subprocess runner, sidebar and page headers. Domain
+logic lives in core.py, which imports no Streamlit. Pages import their
+domain operations directly from core.
 
-Every public name in core is re-exported below, so pages keep calling
-``C.lead_key(...)``, ``C.load_leads()``, ``C.SIGNALS_CSV`` unchanged. If
-you are adding logic that does not touch ``st.*``, put it in core.py.
-
-Stage changes still go through ``set_stage`` / ``mark_followed_up`` HERE,
-not through core's ``apply_stage`` / ``apply_followup`` — the wrappers add
-the undo snapshot and the toast. Pages must never write status files
-directly.
+UI stage changes go through ``set_stage`` here; the wrapper adds the undo
+snapshot and toast. Pages do not write status files directly.
 
 AAL_DATA_DIR env var overrides the data directory (tests, container
 deploy); default is the repo root.
 """
 
-import csv
-import json
-import os
 import threading
-from datetime import date, datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
 
-import delivery
 import runner as engine_runner
 from storage import LockBusy, lock_info
 
-from core import (AGENCY_WATCHLIST_FILE, ATS_URL_PATTERNS, CHANNELS,
-    CHANNEL_COLORS, CONFIG_DIR, CONTACTS_CACHE, DAILY_QUEUE_CAP,
-    DATA_DIR, DEFAULT_EMAIL_SUBJECT, DEFAULT_EMAIL_TEMPLATE,
-    DEFAULT_FOLLOWUP2_TEMPLATE, DEFAULT_FOLLOWUP_TEMPLATE,
-    DEFAULT_MEETING_RATE, DEFAULT_PROSPECT_DM, DEFAULT_PROSPECT_FOLLOWUP,
-    DEFAULT_PROSPECT_FOLLOWUP2, DEFAULT_TEMPLATE, DISCOVERY_STATE,
-    ENRICHED_CSV, ENV_FILE, FOLLOWUP_DAYS, FRESH_DAYS, HERE,
-    INBOX_STATUS, LEGACY_MAP, MAX_FOLLOWUPS, PLATFORMS, PROSPECTS_CONFIG,
-    PROSPECTS_CSV, PROSPECTS_STATUS, PROSPECT_SIGNALS_CSV,
-    PROSPECT_STAGES, SIGNALS_CSV, STAGES, STAGE_COLORS, STATE_FILE,
-    WATCHLIST_FILE, active_email_adapter, all_clients, all_tracked_jobs,
-    apply_followup, apply_replies, apply_stage, delivery_adapters,
-    derive_niche_keywords, display_hook, effective_status, followup_due,
-    lead_key, list_profiles, load_contacts_cache, load_leads,
-    load_profile, load_prospect_signals, load_prospects,
-    load_prospects_config, load_status, load_watchlist, mailto_link,
-    mandates_for_agency, parse_board_url, parse_csv_line, parse_weights,
-    prospect_key, render_dm, render_prospect_dm, save_contacts_cache,
-    save_prospects_config, save_status, save_watchlist,
-    tracked_job_counts, weights_to_text)
-
-# Safety net for the list above. That explicit import is good documentation
-# — you can read it and see the public surface — but it goes stale the
-# moment core gains a function, and the failure mode is an AttributeError
-# deep inside a page at runtime (this happened with market_tokens).
-#
-# So: anything public in core that isn't already bound here gets bound
-# automatically. It only FILLS GAPS — names common defines itself (set_stage,
-# mark_followed_up) are defined later in this file and still win, because
-# this runs before those definitions.
-import types as _types  # noqa: E402
-
-import core as _core  # noqa: E402
-
-for _name in dir(_core):
-    if _name.startswith("_") or _name in globals():
-        continue
-    _val = getattr(_core, _name)
-    if isinstance(_val, _types.ModuleType):
-        continue        # don't re-export core's own imports (re, hashlib…)
-    globals()[_name] = _val
-del _name, _val
+from core import (DAILY_QUEUE_CAP, INBOX_STATUS, PROSPECTS_STATUS,
+                  apply_stage, effective_status,
+                  followup_due, load_prospects, load_status, prospect_key,
+                  restore_status_record, status_revision,
+                  update_company_contacts)
+from storage import ConflictError
 
 # --- presentation-only constants (domain constants live in core) ---
-# App-wide stage colors (also the badge palette; keep in sync with Help page)
+# App-wide stage colors and badge palette
 STAGE_COLORS = {
     "new": "#D8FF3E",
     "contacted": "#4A90D9",
@@ -92,13 +44,6 @@ STAGE_COLORS = {
 }
 # light backgrounds get dark text, the rest white
 _BADGE_FG = {"new": "#111111", "replied": "#111111"}
-
-# outreach channel (per-client) — badge palette (amber = the theme's
-# highlight color; ink = both channels at once)
-CHANNELS = ["linkedin", "email", "both"]
-CHANNEL_COLORS = {"linkedin": "#4A90D9", "email": "#F2B705", "both": "#0A0A0A"}
-_CHANNEL_FG = {"email": "#111111"}
-
 
 # ============================ look & feel ============================
 
@@ -272,16 +217,6 @@ def stage_badge(stage: str, due: bool = False) -> str:
     return out
 
 
-def channel_badge(channel: str) -> str:
-    """Colored HTML badge for a client's outreach channel."""
-    ch = (channel or "linkedin").lower()
-    bg = CHANNEL_COLORS.get(ch, "#999999")
-    fg = _CHANNEL_FG.get(ch, "#ffffff")
-    icon = {"linkedin": "in", "email": "✉", "both": "in+✉"}.get(ch, "")
-    return (f'<span class="aal-badge" style="background:{bg};color:{fg}">'
-            f'{icon} {ch}</span>')
-
-
 # ============================ toasts & undo ============================
 
 def push_toast(msg: str, icon: str = "✅"):
@@ -327,19 +262,6 @@ def undo_last():
                    "Reload before trying again.", "⚠️")
         return None
     return u["label"]
-
-
-def render_undo(key: str = "undo_btn"):
-    """'Undo last action' button — appears only when there is one to undo."""
-    u = undo_available()
-    if not u:
-        return
-    if st.button(f"↩ Undo: {u['label']}", key=key,
-                 help="Restores the previous stage/notes/follow-up state of "
-                      "the last lead you changed."):
-        label = undo_last()
-        push_toast(f"Undone: {label}", "↩")
-        st.rerun()
 
 
 
@@ -437,19 +359,6 @@ def render_contact_editor(row, wkey):
                 push_toast(f"Contact removed from {board}", "🗑")
                 st.rerun()
 
-
-
-def mark_followed_up(status, key, lead_label: str = "", path=None):
-    """Reset the follow-up timer and count the touch (day-3 -> day-6 -> stop).
-
-    UI wrapper over core.apply_followup: adds the undo snapshot and toast.
-    """
-    _snapshot_undo(status, key, f"follow-up on {lead_label}" if lead_label
-                   else "follow-up", path)
-    e = apply_followup(status, key, path)
-    st.session_state["_undo"]["expected"] = status_revision(status, key)
-    push_toast(f"Follow-up #{e['fu']} logged"
-               + (f" — {lead_label}" if lead_label else ""), "🔁")
 
 
 def set_stage(status, key, stage, notes=None, lead_label: str = "", path=None):

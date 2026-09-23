@@ -23,6 +23,7 @@ from datetime import date
 import streamlit as st
 
 import common as C
+import core
 from evidence import load_refreshes, verified_at
 from storage import atomic_write_text, read_json, update_json
 import sweep_core
@@ -50,11 +51,11 @@ with st.expander("Optional contact lookup"):
                     extra_args=["--from-minilists", "--limit", 25],
                     label="Look up sample contacts")
 
-wl = C.load_watchlist()
-counts = C.tracked_job_counts()
-refreshes = load_refreshes(C.BOARD_REFRESH_FILE)
+wl = core.load_watchlist()
+counts = core.tracked_job_counts()
+refreshes = load_refreshes(core.BOARD_REFRESH_FILE)
 total_boards = sum(len(v) for v in wl.values())
-agency_watch = read_json(C.AGENCY_WATCHLIST_FILE, default={},
+agency_watch = read_json(core.AGENCY_WATCHLIST_FILE, default={},
                          expected_type=dict)
 agency_total = sum(len(tokens) for tokens in agency_watch.values())
 tab_boards, tab_agencies, tab_jobs = st.tabs(
@@ -67,8 +68,8 @@ with tab_boards:
         st.info("No employer boards are tracked. Add a board URL below, "
                 "then refresh it to establish a baseline.")
     else:
-        cols = st.columns(len(C.PLATFORMS))
-        for col, p in zip(cols, C.PLATFORMS):
+        cols = st.columns(len(core.PLATFORMS))
+        for col, p in zip(cols, core.PLATFORMS):
             live = sum(counts.get(f"{p}:{t}", 0) for t in wl.get(p, []))
             col.metric(p.title(), len(wl.get(p, [])), f"{live} stored roles")
 
@@ -80,14 +81,14 @@ with tab_boards:
              "are parsed out of the URL — you don't need to know them.")
     if st.button("Add to watchlist", key="sig_add_btn",
                  disabled=not url.strip()):
-        platform, token = C.parse_board_url(url)
+        platform, token = core.parse_board_url(url)
         if not platform:
             st.error("Couldn't parse that URL. It must be a Greenhouse, "
                      "Lever, Ashby or Workable board.")
         elif token in wl.get(platform, []):
             st.warning(f"`{platform}:{token}` is already tracked.")
         else:
-            C.update_watchlist(add=[(platform, token)])
+            core.update_watchlist(add=[(platform, token)])
             C.push_toast(f"Added {platform}:{token}", "📡")
             st.rerun()
 
@@ -123,7 +124,7 @@ with tab_boards:
             "Paste some names above and this button turns on.")
         # Always rendered, just disabled — a button that appears out of
         # nowhere once you type is a button people don't find.
-        names_file = C.DATA_DIR / "_bulk_names.txt"
+        names_file = core.DATA_DIR / "_bulk_names.txt"
         busy = C.engine_running() or C.engine_busy()
         if st.button("🌱 Find their boards & add", key="sig_bulk_run",
                      type="primary", width="stretch",
@@ -147,7 +148,7 @@ with tab_boards:
                  "last_success": refreshes.get(f"{p}:{t}", {}).get(
                      "last_success", "") or "",
                  "current_evidence": bool(verified_at(f"{p}:{t}", refreshes))}
-                for p in C.PLATFORMS for t in wl.get(p, [])]
+                for p in core.PLATFORMS for t in wl.get(p, [])]
         if q.strip():
             ql = q.strip().lower()
             rows = [r for r in rows
@@ -169,7 +170,7 @@ with tab_boards:
                             for token in tokens)
             selected = st.selectbox("Employer board", boards,
                                     key="company_board_select")
-            mapping = read_json(C.COMPANY_BOARD_MAPPINGS, default={},
+            mapping = read_json(core.COMPANY_BOARD_MAPPINGS, default={},
                                 expected_type=dict).get(selected, {})
             company_name = st.text_input(
                 "Confirmed company name", mapping.get("company", ""),
@@ -188,7 +189,7 @@ with tab_boards:
                      "as one company in samples.")
             if st.button("Save company identity", key="company_board_save"):
                 try:
-                    C.set_company_board(selected, company_name,
+                    core.set_company_board(selected, company_name,
                                         contact_key, domain)
                 except ValueError as error:
                     st.error(str(error))
@@ -202,7 +203,7 @@ with tab_boards:
             help="Removing a board stops future sweeps. Its recorded history "
                  "is kept — deleting boards never deletes history.")
         if drop and st.button("Remove selected", key="sig_drop_btn"):
-            C.update_watchlist(
+            core.update_watchlist(
                 remove=[(item.partition(":")[0], item.partition(":")[2])
                         for item in drop])
             C.push_toast(f"Removed {len(drop)} board(s)", "🗑")
@@ -210,7 +211,7 @@ with tab_boards:
 
 # --------------------------------------------- agency boards
 with tab_agencies:
-    checks = load_refreshes(C.AGENCY_REFRESH_FILE)
+    checks = load_refreshes(core.AGENCY_REFRESH_FILE)
     board_keys = sorted(f"{platform}:{token}"
                         for platform, tokens in agency_watch.items()
                         for token in tokens)
@@ -234,7 +235,7 @@ with tab_agencies:
     with st.expander("Add or discover agency boards"):
         url = st.text_input("Agency board URL", key="agency_board_url")
         if st.button("Track agency board", key="agency_board_add"):
-            platform, token = C.parse_board_url(url)
+            platform, token = core.parse_board_url(url)
             if not platform:
                 st.error("Use a Greenhouse, Lever, Ashby or Workable board URL.")
             else:
@@ -243,7 +244,7 @@ with tab_agencies:
                     if token not in tokens:
                         tokens.append(token)
                         tokens.sort()
-                update_json(C.AGENCY_WATCHLIST_FILE, add_board,
+                update_json(core.AGENCY_WATCHLIST_FILE, add_board,
                             default={}, expected_type=dict)
                 st.success("Board tracked. Refresh it and confirm which "
                            "agency owns it before using its postings.")
@@ -255,12 +256,12 @@ with tab_agencies:
                                   "in Prospects. Review matches before use.")
 
     with st.expander("Confirm which agency owns a board"):
-        prospects = C.load_prospects()
+        prospects = core.load_prospects()
         agency_names = sorted({p.get("agency", "").strip() for p in prospects
                                if p.get("agency", "").strip()})
-        mappings = read_json(C.AGENCY_BOARD_MAPPINGS, default={},
+        mappings = read_json(core.AGENCY_BOARD_MAPPINGS, default={},
                              expected_type=dict)
-        suggestions = read_json(C.DATA_DIR / "agency_board_suggestions.json",
+        suggestions = read_json(core.DATA_DIR / "agency_board_suggestions.json",
                                 default={}, expected_type=dict)
         if agency_names and board_keys:
             selected_agency = st.selectbox("Prospect agency", agency_names,
@@ -278,7 +279,7 @@ with tab_agencies:
                            f"{check.get('status', 'never checked')}; "
                            f"last success {check.get('last_success') or 'unknown'}")
             if st.button("Save confirmed boards", key="save_agency_boards"):
-                C.set_agency_boards(selected_agency, selected_boards)
+                core.set_agency_boards(selected_agency, selected_boards)
                 st.success("Agency board identity saved.")
                 st.rerun()
         else:
@@ -293,8 +294,8 @@ with tab_jobs:
     # No st.stop() anywhere in this block. st.stop() halts the whole
     # script, not the tab — inside a tab it would kill any tab rendered
     # after it. Empty states branch instead.
-    jobs = C.all_tracked_jobs()
-    hist_path = C.DATA_DIR / "job_history.json"
+    jobs = core.all_tracked_jobs()
+    hist_path = core.DATA_DIR / "job_history.json"
     hist, hist_broken = {}, False
     if hist_path.exists():
         try:

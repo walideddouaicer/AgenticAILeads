@@ -6,13 +6,14 @@ import streamlit as st
 
 import client_delivery as D
 import common as C
+import core
 from evidence import load_refreshes, verified_at
 from filter_engine import DEFAULTS
 from storage import ConflictError, DataFileError, revision
 
 C.page_header("👤 Clients", "clients")
-leads, source = C.load_leads()
-status, raw_revisions = C.load_status(with_revisions=True)
+leads, source = core.load_leads()
+status, raw_revisions = core.load_status(with_revisions=True)
 ids = D.client_ids(leads)
 if st.session_state.get("client_pending_selection"):
     st.session_state["client_choice"] = st.session_state.pop(
@@ -24,10 +25,10 @@ view = ("Profile & matches" if client == "Create client" else
             "Client work", ["Profile & matches", "Outreach", "Outcomes & report"],
             default="Profile & matches", key="client_view"))
 client_leads = [row for row in leads if row.get("client") == client]
-config_path = C.CONFIG_DIR / f"{client}.json"
+config_path = core.CONFIG_DIR / f"{client}.json"
 raw_config = ({} if client == "Create client" else
-              C.read_json(config_path, default={}, expected_type=dict))
-config = ({} if client == "Create client" else C.load_profile(client))
+              core.read_json(config_path, default={}, expected_type=dict))
+config = ({} if client == "Create client" else core.load_profile(client))
 
 if view == "Profile & matches":
     st.subheader("Client profile")
@@ -37,10 +38,10 @@ if view == "Profile & matches":
         st.info("Create a real client profile to match employers. The "
                 "app's `default` filter is reserved for its own prospecting.")
         config = {**DEFAULTS, "client_id": "", "meeting_rate":
-                  C.DEFAULT_MEETING_RATE, "channel": "linkedin",
-                  "dm_template": C.DEFAULT_TEMPLATE,
-                  "followup_template": C.DEFAULT_FOLLOWUP_TEMPLATE,
-                  "followup2_template": C.DEFAULT_FOLLOWUP2_TEMPLATE}
+                  core.DEFAULT_MEETING_RATE, "channel": "linkedin",
+                  "dm_template": core.DEFAULT_TEMPLATE,
+                  "followup_template": core.DEFAULT_FOLLOWUP_TEMPLATE,
+                  "followup2_template": core.DEFAULT_FOLLOWUP2_TEMPLATE}
     with st.form("client_profile"):
         c1, c2 = st.columns(2)
         with c1:
@@ -59,28 +60,28 @@ if view == "Profile & matches":
             rate = st.number_input("Agreed rate per attended, chargeable meeting ($)",
                                    min_value=0,
                                    value=int(config.get("meeting_rate") or 0))
-            channel = st.selectbox("Outreach channel", C.CHANNELS,
-                                   index=C.CHANNELS.index(
+            channel = st.selectbox("Outreach channel", core.CHANNELS,
+                                   index=core.CHANNELS.index(
                                        config.get("channel", "linkedin"))
-                                   if config.get("channel", "linkedin") in C.CHANNELS
+                                   if config.get("channel", "linkedin") in core.CHANNELS
                                    else 0)
             active = st.toggle("Active for future board sweeps",
                                value=bool(config.get("active", True)))
         with st.expander("Message templates"):
             dm_template = st.text_area("First message",
-                                       config.get("dm_template", C.DEFAULT_TEMPLATE))
+                                       config.get("dm_template", core.DEFAULT_TEMPLATE))
             followup_template = st.text_area(
                 "Follow-up", config.get("followup_template",
-                                        C.DEFAULT_FOLLOWUP_TEMPLATE))
+                                        core.DEFAULT_FOLLOWUP_TEMPLATE))
             followup2_template = st.text_area(
                 "Final follow-up", config.get("followup2_template",
-                                              C.DEFAULT_FOLLOWUP2_TEMPLATE))
+                                              core.DEFAULT_FOLLOWUP2_TEMPLATE))
         save = st.form_submit_button("Save client profile", type="primary")
     if save:
         edited = {**config, "client_id": client_id.strip(), "label": label.strip(),
-                  "inclusion_keywords": C.parse_csv_line(niches),
-                  "allowed_locations": C.parse_csv_line(locations),
-                  "exclusion_keywords": C.parse_csv_line(exclusions),
+                  "inclusion_keywords": core.parse_csv_line(niches),
+                  "allowed_locations": core.parse_csv_line(locations),
+                  "exclusion_keywords": core.parse_csv_line(exclusions),
                   "meeting_rate": int(rate), "channel": channel,
                   "active": active, "dm_template": dm_template,
                   "followup_template": followup_template,
@@ -105,8 +106,8 @@ if view == "Profile & matches":
                    "selected. Review each source and choose the jobs to add "
                    "for this client. The first board sweep remains a baseline.")
         matches = D.preview_matches(
-            config, C.all_tracked_jobs(),
-            load_refreshes(C.BOARD_REFRESH_FILE))
+            config, core.all_tracked_jobs(),
+            load_refreshes(core.BOARD_REFRESH_FILE))
         if not matches:
             st.info("No current jobs match this profile. Adjust the niche or "
                     "market, or refresh employer boards in Signals.")
@@ -155,7 +156,7 @@ if view == "Outreach":
         if not visible:
             st.info("No leads match this search.")
         else:
-            options = {C.lead_key(row): row for row in visible}
+            options = {core.lead_key(row): row for row in visible}
             key = st.selectbox("Selected lead", list(options),
                                format_func=lambda value: (
                                    f"{options[value].get('company')} — "
@@ -163,18 +164,18 @@ if view == "Outreach":
                                key="client_selected_lead")
             row = options[key]
             entry = status.get(key) or {}
-            stage = C.effective_status(entry)
-            st.markdown(C.stage_badge(stage, C.followup_due(entry)),
+            stage = core.effective_status(entry)
+            st.markdown(C.stage_badge(stage, core.followup_due(entry)),
                         unsafe_allow_html=True)
             st.write(f"**{row.get('company', '')}** — {row.get('title', '')} · "
                      f"{row.get('location', '')}")
             board = f"{row.get('platform', '')}:{row.get('company', '')}"
-            checked = verified_at(board, load_refreshes(C.BOARD_REFRESH_FILE))
+            checked = verified_at(board, load_refreshes(core.BOARD_REFRESH_FILE))
             st.caption(f"Source board: {board} · last verified: "
                        f"{checked or 'not current'}")
             if row.get("url"):
                 st.markdown(f"[Open source job ↗]({row['url']})")
-            st.caption("Opener: " + C.display_hook(row))
+            st.caption("Opener: " + core.display_hook(row))
             C.render_contact_editor(row, f"client_{key}")
             contact_name = row.get("contact1_name", "")
             linkedin = (row.get("contact1_linkedin") or "").strip()
@@ -193,16 +194,16 @@ if view == "Outreach":
                                "client(s): " + ", ".join(other_clients)
                                + ". Check before sending again.")
             ready = stage == "new" or (stage == "contacted" and
-                                       C.followup_due(entry))
+                                       core.followup_due(entry))
             if ready:
                 kind = "initial" if stage == "new" else "followup"
                 fu = int(entry.get("fu", 0) or 0)
-                template = (config.get("dm_template", C.DEFAULT_TEMPLATE)
+                template = (config.get("dm_template", core.DEFAULT_TEMPLATE)
                             if kind == "initial" else
-                            config.get("followup2_template", C.DEFAULT_FOLLOWUP2_TEMPLATE)
+                            config.get("followup2_template", core.DEFAULT_FOLLOWUP2_TEMPLATE)
                             if fu >= 1 else
-                            config.get("followup_template", C.DEFAULT_FOLLOWUP_TEMPLATE))
-                draft = (entry.get("drafts") or {}).get(kind) or C.render_dm(
+                            config.get("followup_template", core.DEFAULT_FOLLOWUP_TEMPLATE))
+                draft = (entry.get("drafts") or {}).get(kind) or core.render_dm(
                     template, row)
                 message = st.text_area("Final message", draft, height=140,
                                        key=f"client_message_{key}_{kind}")
@@ -210,7 +211,7 @@ if view == "Outreach":
                     drafts = dict(entry.get("drafts") or {})
                     drafts[kind] = message
                     try:
-                        C.update_status_fields(status, key, {"drafts": drafts},
+                        core.update_status_fields(status, key, {"drafts": drafts},
                                                expected=raw_revisions.get(
                                                    key, revision(None)))
                     except ConflictError as error:
@@ -252,7 +253,7 @@ if view == "Outreach":
             notes = st.text_area("Lead notes", entry.get("notes", ""),
                                  key=f"client_notes_{key}")
             if st.button("Save notes", key=f"client_notes_save_{key}"):
-                C.update_status_fields(status, key, {"notes": notes})
+                core.update_status_fields(status, key, {"notes": notes})
                 C.push_toast("Lead notes saved")
                 st.rerun()
             if stage != "dismissed":
@@ -289,7 +290,7 @@ if view == "Outcomes & report":
                                                              "meeting_id", key)),
                                 key="client_meeting_choice")
         current_meeting = client_meetings.get(existing) or {}
-        lead_options = {C.lead_key(row): row for row in client_leads}
+        lead_options = {core.lead_key(row): row for row in client_leads}
         with st.form("record_meeting"):
             c1, c2 = st.columns(2)
             with c1:
@@ -342,8 +343,8 @@ if view == "Outcomes & report":
                                 key="client_report_stage")
     search = st.text_input("Search company or role", key="client_report_search")
     selected_leads = [row for row in client_leads
-                      if (stage_filter == "All" or C.effective_status(
-                          status.get(C.lead_key(row))) == stage_filter)
+                      if (stage_filter == "All" or core.effective_status(
+                          status.get(core.lead_key(row))) == stage_filter)
                       and search.casefold() in (row.get("company", "") + " " +
                                                 row.get("title", "")).casefold()]
     rate = (int(raw_config["meeting_rate"])
@@ -351,7 +352,7 @@ if view == "Outcomes & report":
     rows = D.report_rows(client, selected_leads, status, meetings, rate)
     selected_meetings, estimate = D.meeting_summary(
         client, meetings, rate,
-        selected_lead_keys={C.lead_key(row) for row in selected_leads})
+        selected_lead_keys={core.lead_key(row) for row in selected_leads})
     m1, m2, m3 = st.columns(3)
     m1.metric("Selected leads", len(selected_leads))
     m2.metric("Attended meetings", len(selected_meetings))

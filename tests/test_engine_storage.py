@@ -38,8 +38,8 @@ def test_writer_paths_follow_configured_data_directory():
         agency_discovery.AGENCY_WATCHLIST_FILE, agency_discovery.STATE_FILE,
         prospector_engine.PROSPECTS_CSV, prospector_engine.SEEN_FILE,
         prospector_engine.PROBE_FILE, import_clay.PROSPECTS_CSV,
-        import_clay.SEEN_FILE, enrichment_engine.OUT_CSV,
-        enrichment_engine.CACHE_FILE, build_today.TODAY_FILE,
+        import_clay.SEEN_FILE, enrichment_engine.CACHE_FILE,
+        build_today.TODAY_FILE,
         minilist_engine.OUT_DIR,
     ]
     wrong = [str(path) for path in paths if path.parent != expected]

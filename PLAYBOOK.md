@@ -1,3 +1,6 @@
+# Historical business notes — unverified and superseded by README.md for app operation.
+# Do not treat old volume, pricing, or integration claims as current product behavior.
+
 # AGENTIC AI LEADS — PROJECT PLAYBOOK
 *Last updated: July 17, 2026 (blocks 8–10: own-client prospecting machine). Give this file to any AI assistant to restore full project context.*
 

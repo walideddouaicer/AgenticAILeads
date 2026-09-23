@@ -3,6 +3,7 @@
 import streamlit as st
 
 import common as C
+import core
 import runner
 from contacts import load_env_key
 from storage import DataFileError, read_json
@@ -12,7 +13,7 @@ C.page_header("⚙️ Settings", "settings")
 st.caption("Save each form before leaving this screen; unsaved changes are discarded.")
 
 st.subheader("Prospect criteria")
-icp = C.load_icp()
+icp = core.load_icp()
 with st.form("prospect_criteria"):
     c1, c2 = st.columns(2)
     with c1:
@@ -30,16 +31,16 @@ with st.form("prospect_criteria"):
         if min_size > max_size:
             st.error("Minimum employees must be no higher than maximum.")
         else:
-            C.save_icp({"titles": C.parse_csv_line(titles),
-                        "countries": C.parse_csv_line(countries),
-                        "keywords": C.parse_csv_line(keywords),
+            core.save_icp({"titles": core.parse_csv_line(titles),
+                        "countries": core.parse_csv_line(countries),
+                        "keywords": core.parse_csv_line(keywords),
                         "size_min": min_size, "size_max": max_size})
             st.success("Criteria saved for future searches. Existing "
                        "prospects stay visible and are flagged if off target.")
 
 st.divider()
 st.subheader("Prospect messages")
-cfg = C.load_prospects_config()
+cfg = core.load_prospects_config()
 st.caption("Available fields: {first_name}, {agency}, {hook}, "
            "{person_title}, {location}, {sample_count}, {contact_count}, "
            "{sample_summary}. Sample fields require approved current rows.")
@@ -50,23 +51,23 @@ with st.form("prospect_templates"):
     followup2 = st.text_area("Final follow-up", cfg["followup2_template"],
                               height=105)
     if st.form_submit_button("Save templates"):
-        C.save_prospects_config({"dm_template": initial,
+        core.save_prospects_config({"dm_template": initial,
                                  "followup_template": followup1,
                                  "followup2_template": followup2})
         st.success("Templates saved. Review each final draft before sending.")
 
 st.divider()
 st.subheader("Data and integrations")
-st.caption(f"Data directory: {C.DATA_DIR}")
-st.caption(f"Local environment file: {C.ENV_FILE}")
-apollo_available = bool(load_env_key("APOLLO_API_KEY", C.ENV_FILE))
+st.caption(f"Data directory: {core.DATA_DIR}")
+st.caption(f"Local environment file: {core.ENV_FILE}")
+apollo_available = bool(load_env_key("APOLLO_API_KEY", core.ENV_FILE))
 st.write("Apollo prospect lookup: " +
          ("configured; access unverified" if apollo_available
           else "not configured; CSV and manual entry remain available"))
 st.caption("No provider lookup runs when this page opens.")
 
 with st.expander("Backups and restore"):
-    backups = sorted((C.DATA_DIR / "backups").glob("*.json"), reverse=True)
+    backups = sorted((core.DATA_DIR / "backups").glob("*.json"), reverse=True)
     if not backups:
         st.info("No history backups yet. A collection run creates them "
                 "when history files exist.")
@@ -79,9 +80,9 @@ with st.expander("Backups and restore"):
                                      key="restore_confirmation")
         if st.button("Restore selected history", disabled=confirmation != "RESTORE"):
             if selected.name.startswith("job_history_"):
-                destination = C.DATA_DIR / "job_history.json"
+                destination = core.DATA_DIR / "job_history.json"
             elif selected.name.startswith("mandate_history_"):
-                destination = C.DATA_DIR / "mandate_history.json"
+                destination = core.DATA_DIR / "mandate_history.json"
             else:
                 st.error("This backup name does not identify a history file.")
                 destination = None

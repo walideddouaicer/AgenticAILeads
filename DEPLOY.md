@@ -1,3 +1,6 @@
+# Historical deployment notes — not a current deployment procedure.
+# Phase 7 will validate a portable and secure setup; use README.md for local operation.
+
 # Deploying Agentic AI Leads on Coolify
 
 A step-by-step guide to deploy the Agentic AI Leads CRM on **Coolify**. Follow

@@ -1,154 +1,55 @@
 # Agentic AI Leads
 
-## Cleanup in progress
+A local Streamlit app for two founder workflows: finding recruitment agencies to approach, then managing hiring leads for a client. Sending and outcome recording are manual. The four screens are **Prospects**, **Clients**, **Signals**, and **Settings**.
 
-The current work follows [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
-See [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) for completed phases,
-baseline failures and release blockers. The sections below describe the existing
-app; they are not a claim that the final cleanup is complete.
+## Install
 
-Linux development baseline: **Python 3.13.15** (see `.python-version`).
-`requirements.txt` pins the tested direct and transitive dependencies. To set up:
+Use Python 3.13.15 on Linux (see `.python-version`):
 
 ```sh
 python3.13 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python scripts/check.py
+.venv/bin/python scripts/check.py --logs-dir /tmp/aal-check
 ```
 
-Use the isolated check runner above instead of invoking fixture tests directly.
-It runs offline in a temporary source/data copy. Expected workflow failures are
-reported separately and remain release blockers. To retain detailed logs, add
-`--logs-dir /tmp/aal-check-logs`.
+On Windows, create the environment with `py -3.13 -m venv .venv`, then use `.venv\Scripts\python.exe` for the commands below. The isolated check runner copies source and fixtures to a temporary directory, blocks external network calls, and does not use your working data.
 
-To launch the current app locally, set `APP_USERNAME` and `APP_PASSWORD` in your
-shell without saving them to Git, then run:
+## Configure and start
+
+Set `APP_USERNAME` and `APP_PASSWORD` in the process environment, or `APP_USERS` for two logins. Keep credentials out of Git. Optional `AAL_DATA_DIR` points all app and engine data at one shared directory; by default it is the project directory. Optional `AAL_ENV_FILE` points to an environment file with an Apollo key for prospect or contact lookup. No provider key is needed for CSV imports, manual contact entry, or manual outreach.
 
 ```sh
+export APP_USERNAME=operator
+export APP_PASSWORD='choose-a-private-password'
 .venv/bin/python -m streamlit run app.py --server.address 127.0.0.1
 ```
 
-The container uses the same Python minor version; its deployment/recovery review
-is deferred to Phase 7. No recurring sweep is installed by these instructions.
+Open the local URL printed by Streamlit and sign in. The Windows equivalent is to set the two variables with `$env:APP_USERNAME` and `$env:APP_PASSWORD` in PowerShell, then run `.venv\Scripts\python.exe -m streamlit run app.py --server.address 127.0.0.1`.
 
-Lead-generation pipeline that watches companies' public job boards for hiring
-signals, scores and filters them per client, enriches promising companies with
-decision-maker contacts, and manages outreach in a local CRM.
+## Acquire an agency client
 
-## How it works
+1. In **Prospects**, import an agency CSV or add a person manually. Apollo search is optional. Check the agency and person details.
+2. Use **Signals** to add or discover agency boards, then refresh agency postings. Confirm board mappings before using a mandate as evidence.
+3. Review the prospect's current evidence and sample in **Prospects**. Correct missing contacts or niche details, edit the final message, and send it yourself through the selected channel.
+4. Record the send only after it happened. Work replies and follow-ups on the same screen; mark a client won when agreed. **Settings** holds prospect criteria and editable message templates.
 
-1. **`signal_engine.py`** — polls public job boards on 4 ATS platforms
-   (Greenhouse, Lever, Ashby, Workable) and reports roles opened since the
-   last run. Each new role is an outreach signal, appended to `signals.csv`.
-2. **`filter_engine.py`** — scores signals against per-client keyword/location
-   profiles stored in `configs/*.json`.
-3. **`enrichment_engine.py`** — looks up recruiting/TA decision-makers at the
-   signal companies via the Apollo.io API.
-4. **`app.py`** — Streamlit CRM (multipage; see below).
-5. **`discovery_engine.py`** — continuous watchlist growth: probes company
-   names (from any list you collect) across all 4 ATS platforms, harvests
-   board URLs from Hacker News "Who is hiring" threads, and extracts tokens
-   from any saved page. Dead candidates are cached 90 days so weekly re-runs
-   stay fast.
-6. **`minilist_engine.py`** — free mini-list generator: matches a prospect
-   agency's niche keywords against tracked jobs and produces a branded
-   CSV + HTML gift list (the "here's 10 companies hiring in your niche"
-   door-opener). Also available as the CRM's Mini-List page.
+The app does not send messages, enroll people in email sequences, or sync replies. The send record preserves the actual message and sample used.
 
-### Own-client prospecting (finding OUR clients)
+## Deliver for a client
 
-A second, fully separate pipeline that finds recruitment agencies to sell to:
+1. In **Clients**, create a client profile with target roles, locations, exclusions, outreach channel, and agreed meeting rate.
+2. In **Signals**, add or discover employer boards and run a refresh. Only recently verified postings support current claims.
+3. Back in **Clients**, review matching jobs, select verified ones for backfill, inspect the source and contact, and correct the contact if needed.
+4. Edit the message, send it manually, and record the send, reply, and outcome. Record attended meetings once, link related leads, and mark whether each is free or chargeable. Export the selected client report CSV.
 
-7. **`prospector_engine.py`** — searches Apollo for decision-makers
-   (founders/MDs/owners) at small recruitment/staffing agencies (2–20
-   employees, US/UK/FR by default) and appends them to `prospects.csv`.
-   **Run `--probe` first** — it dumps one raw response so you can verify
-   which filter names your Apollo plan accepts.
-8. **`agency_discovery.py`** — probes prospect agency names across the 4 ATS
-   platforms and classifies live boards as agency boards (name markers or an
-   "agency book" posting pattern) into `agency_watchlist.json` — never mixed
-   with the client watchlist.
-9. **`prospect_signal_engine.py`** — sweeps agency boards; each new posting
-   is a prospect signal ("this agency just took a mandate") appended to
-   `prospect_signals.csv` — the hook for our own outreach.
+The first meeting defaults to free. The recorded estimate uses the saved client rate for chargeable attended meetings; it is not an invoice or a payment record. Apollo contact enrichment is optional and only runs when an operator chooses it.
 
-## The CRM (`streamlit run app.py`)
+Useful headless commands (run from the project directory) are `signal_engine.py --baseline` for the first employer sweep, `prospect_signal_engine.py --baseline` for the first agency sweep, `build_today.py --dry-run` for the current acquisition queue, and `enrichment_engine.py --list-companies` to inspect lookup candidates without making provider calls. Each supports `--help`. The app also has buttons for the supported refresh tasks. A first sweep establishes a baseline; it does not claim old postings are newly opened.
 
-Multipage app (`st.navigation`); `app.py` is the entry point, pages live in
-`views/`, shared helpers in `common.py`, theme in `.streamlit/config.toml`
-(editorial-brutalist: paper `#F4F2EC` / ink `#0A0A0A` / coral-red `#D14829`
-accent, Archivo + JetBrains Mono, square corners, hard-shadow hovers). The
-sidebar always shows follow-ups due, new leads, touched-today and
-boards-watched counts.
+## Back up and recover
 
-| Page | What it does |
-|---|---|
-| **Home** | Today's metrics, pipeline funnel, per-client billable summary, first-run checklist, and buttons that run all three engines in-app with live output (one at a time — lockfile-guarded). |
-| **Work → Outreach Queue** | Follow-ups due + top-N ranked new sends, pre-drafted DMs, double-DM guard, focus mode (one card at a time with progress), undo, daily cap. |
-| **Work → Daily Inbox** | Every signal with stage badges (new / contacted / replied / won / dismissed), notes, DM drafts, follow-up timers; 25 per page. |
-| **Work → Prospects** | OUR pipeline: agency decision-makers from the prospector, mandate hooks from the sweep, DM drafts from editable templates, and a one-click per-prospect mini-list (CSV + branded HTML) as the door-opener. Stages: new → contacted → replied → call booked → client won. |
-| **Clients → Client Pages** | Per-client leads, filters, metrics, billable total, CSV client report. |
-| **Clients → Mini-List** | The free gift list (CSV + branded HTML one-pager). |
-| **System → Watchlist** | Boards swept nightly: URL paste, bulk import, manual add, discovery run, search, bulk remove, live-job counts. |
-| **System → Live Jobs** | Every tracked job across all boards — search, platform/location filters, CSV export. |
-| **System → Client Configs** | Profiles with live tester, dry-run over tracked jobs, backfill, type-to-confirm delete, and per-client delivery channel + email campaign id. |
-| **System → Help** | The full operating guide: pipeline diagram, per-page docs, glossary, daily routine, troubleshooting. Every page has a "?" popover linking to its section. |
+Keep the app's data directory on persistent storage. The runner's refresh chain saves existing job and mandate histories under `backups/` before it runs. **Settings** shows these backups and can restore a selected history after confirmation. The restore saves the current history as a pre-restore backup. A damaged JSON file is reported rather than silently replaced.
 
-## Delivery layer (optional email tools)
+For a full manual backup, stop writers and copy the entire data directory, including profiles, mappings, contact corrections, statuses, meetings, and both histories, to a private location. Keep `.env` and login credentials out of shareable archives. Before restoring, make a separate copy of the current directory, inspect the backup, and deliberately replace the intended files while the app and engines are stopped. A complete automated backup/restore round trip and portable Linux scheduling are Phase 7 work.
 
-Outreach is manual by default — the app drafts, a human sends on LinkedIn.
-An email-sending tool (**Instantly**, **Smartlead**, or **Apollo email
-sequences**) can be plugged in later by adding **one API key to `.env`** — no
-code change. `delivery.py` holds an adapter per tool; each reports "not
-configured" and no-ops cleanly when its key is absent. **Nothing is ever sent
-automatically** — sending needs a configured key *and* a button press.
-
-- **Export for email tool** (Outreach Queue + Client Pages) — an
-  Instantly-format lead-import CSV (unlocked emails only); works today with
-  zero API access.
-- **Sync replies** (Client Pages) — polls the configured tool and moves
-  matched leads (by email) to the `replied` stage. Polling only, no webhooks.
-- Per-client **channel** (`linkedin`/`email`/`both`) + **campaign id** in
-  Client Configs; the channel shows as a badge on queue cards.
-- Verify vendor payloads before the first real send:
-  `python delivery.py --probe` (prints the exact requests, sends nothing).
-  Sync from the CLI with `python delivery.py --sync-replies`.
-
-See the app's **Help → Integrations** section for per-adapter setup, and
-`.env.example` for the key names.
-
-## Setup
-
-```bash
-pip install -r requirements.txt
-cp .env.example .env   # then fill in the keys you have (all optional)
-```
-
-## Usage
-
-```bash
-streamlit run app.py               # open the CRM (engines can be run from Home)
-python signal_engine.py            # fetch new job signals (use --baseline on first run)
-python discovery_engine.py --hn 3  # grow watchlist from HN "Who is hiring" threads
-python discovery_engine.py --names companies.txt   # ...or from a company-name list
-python enrichment_engine.py        # enrich companies with contacts via Apollo
-python minilist_engine.py --prospect "Acme Staffing" --keywords "java, .net" \
-    --locations "united states"    # build a free mini-list for a prospect
-
-# own-client prospecting
-python prospector_engine.py --probe          # ALWAYS first: verify Apollo filters
-python prospector_engine.py                  # then: fill prospects.csv
-python agency_discovery.py --from-prospects  # find the agencies' own boards
-python prospect_signal_engine.py             # sweep their mandates (hooks)
-
-# tests
-python tests/test_units.py                   # classifier, niche derivation, parsing
-python tests/test_pages.py                   # every app page, empty + populated data
-```
-
-Runtime data (`signals.csv`, `signals_state.json`, `inbox_status.json`,
-`enriched_contacts.json`, `discovery_state.json`, `prospects.csv`,
-`prospect_signals*.json/csv`, `prospects_status.json`, the pipeline tracker
-spreadsheet) is intentionally not committed — see `.gitignore`. See
-`PLAYBOOK.md` for the operating playbook, or the CRM's **Help** page for the
-full guide.
+Current engineering checkpoints and remaining release gates are in [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) and [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md). Older strategy and deployment notes are historical and do not describe the supported interface.

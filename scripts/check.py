@@ -92,7 +92,6 @@ def main():
                     ("prospect-import", ["tests/test_prospect_import.py"]),
                     ("client-delivery", ["tests/test_client_delivery.py"]),
                     ("client-page", ["tests/test_client_page.py"]),
-                    ("delivery", ["tests/test_delivery.py"]),
                     ("pages", ["tests/test_pages.py"]),
                     ("workflow-gaps", ["tests/test_workflow_gaps.py"])]
         results = []

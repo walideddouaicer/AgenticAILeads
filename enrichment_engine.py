@@ -36,7 +36,7 @@ Setup: put APOLLO_API_KEY=xxxx in a `.env` next to this script. Without a
 key the engine reports what it WOULD do and exits 0 — the nightly chain
 stays quiet instead of erroring every night.
 
-Output: enriched_signals.csv (signals rows + contact columns)
+Output: enriched_contacts.json (joined with signals.csv when the app reads it)
 Cache:  enriched_contacts.json (company -> contacts; companies are never
         re-queried, so re-runs only hit the API for new companies). This
         cache is permanent value: a trial spent filling it keeps paying
@@ -57,21 +57,18 @@ from pathlib import Path
 import requests
 import contacts as contacts_api
 from runtime import DATA_DIR, ENV_FILE
-from storage import (atomic_write_text, read_json, render_csv,
-                     update_json_record)
+from storage import read_json, update_json_record
 from tls_compat import enable_os_trust_store
 
 enable_os_trust_store()
 
 SIGNALS_CSV = DATA_DIR / "signals.csv"
-OUT_CSV = DATA_DIR / "enriched_signals.csv"
 CACHE_FILE = DATA_DIR / "enriched_contacts.json"
 DOMAINS_FILE = DATA_DIR / "company_domains.json"
 MAPPINGS_FILE = DATA_DIR / "company_board_mappings.json"
 LOOKUP_FILE = DATA_DIR / "contact_lookup_status.json"
 
 RATE_LIMIT_SLEEP = 2.0     # free tier: 50/min, 600/day — stay far under
-CONTACTS_PER_COMPANY = contacts_api.CONTACTS_PER_COMPANY
 
 
 def load_json(path: Path, default):
@@ -324,36 +321,8 @@ def main():
     print(f"\ncache: {hit}/{len(companies)} target companies now have "
           f"contacts ({len(cache)} total in {CACHE_FILE.name})")
 
-    # The signals join below only makes sense for the signals.csv source.
-    if source != "signals.csv" or not SIGNALS_CSV.exists():
-        return
-
-    # Merge contacts into every signal row
-    with SIGNALS_CSV.open(newline="", encoding="utf-8") as stream:
-        rows = list(csv.DictReader(stream))
-    if not rows:
-        return
-    fieldnames = list(rows[0].keys())
-    for i in range(1, CONTACTS_PER_COMPANY + 1):
-        for f in ["name", "title", "linkedin", "email"]:
-            col = f"contact{i}_{f}"
-            if col not in fieldnames:
-                fieldnames.append(col)
-
-    mappings = load_json(MAPPINGS_FILE, {})
-    for r in rows:
-        board = f"{r.get('platform', '')}:{r.get('company', '')}".lower()
-        mapping = mappings.get(board, {})
-        linked = (mapping.get("contacts_key") or mapping.get("company")) \
-            if isinstance(mapping, dict) else ""
-        contacts = cache.get(board) or (cache.get(linked) if linked else []) or []
-        for i, c in enumerate(contacts[:CONTACTS_PER_COMPANY], 1):
-            for k, v in c.items():
-                r[f"contact{i}_{k}"] = v
-    atomic_write_text(OUT_CSV, render_csv(rows, fieldnames))
-
-    print(f"\nWrote {OUT_CSV.name} ({len(rows)} rows). "
-          f"API calls used this run: {calls}")
+    print(f"API calls used this run: {calls}. The app joins cached contacts "
+          "with signals when it reads them.")
 
 
 if __name__ == "__main__":

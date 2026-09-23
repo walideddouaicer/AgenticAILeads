@@ -2,7 +2,7 @@
 """
 Agentic AI Leads — contact provider layer.
 
-One adapter per data vendor, exactly like delivery.py does for email tools.
+One adapter per optional contact lookup vendor.
 Deliberately **Streamlit-free and common-free**: pure, CLI- and unit-
 testable. `enrichment_engine.py` and the CRM may import this; this imports
 neither of them.

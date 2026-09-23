@@ -4,7 +4,7 @@ Agentic AI Leads — core domain logic. NO Streamlit, NO UI.
 
 Everything here is a pure function or a plain file read/write: paths,
 constants, the lead + prospect stores, the stage machine, follow-up rules,
-DM rendering, the watchlist, and the delivery-layer bindings.
+DM rendering and the watchlist.
 
 WHY THIS MODULE EXISTS
 ----------------------
@@ -14,12 +14,11 @@ from inside a browser session — so no scheduled job, no CLI tool and no
 headless script could touch the business logic. Splitting it out is what
 makes automation possible at all.
 
-THE RULE (same one delivery.py and sweep_core.py follow):
+THE RULE (same one sweep_core.py follows):
     common.py may import core.  core must NEVER import common or streamlit.
 tests/test_units.py enforces it.
 
-common.py re-exports every public name here, so pages keep calling
-`C.lead_key(...)` and nothing in views/ had to change.
+Pages import domain operations directly from this module.
 
 Business rules preserved exactly:
   - lead_key()  = md5 of date|client|company|title, first 12 hex chars.
@@ -31,11 +30,8 @@ Business rules preserved exactly:
   - hooks       present-tense wording requires a recent successful board
                 check and a still-listed role (display_hook).
 
-Mutators come in two halves. apply_stage()/apply_followup() here do the
-file write and nothing else, so a script can use them. common.set_stage()
-and common.mark_followed_up() wrap them with the undo snapshot and toast.
-Pages must keep using the common.* versions — never write status files
-directly.
+Domain mutators perform file writes without Streamlit. UI stage changes
+use common.set_stage() for an undo snapshot and toast.
 
 AAL_DATA_DIR relocates the data directory (tests, container deploy).
 """
@@ -49,7 +45,6 @@ from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import quote
 
-import delivery
 from evidence import confirmed_boards, load_refreshes, verified_at
 from filter_engine import DEFAULTS, keyword_matches
 from storage import (ConflictError, DataFileError, DELETE, FileLock, UNSET,
@@ -84,13 +79,6 @@ DEFAULT_TEMPLATE = (
     "Hi {first_name} — {hook}. Roles like that are exactly what we place. "
     "Worth a quick chat about how we can help you fill them faster?"
 )
-DEFAULT_EMAIL_SUBJECT = "Your {title} opening"
-DEFAULT_EMAIL_TEMPLATE = (
-    "Hi {first_name},\n\n"
-    "{hook} — filling roles like that is exactly what we do.\n\n"
-    "Worth a quick call this week? Happy to share how we'd approach it.\n\n"
-    "Best,\n"
-)
 DEFAULT_FOLLOWUP_TEMPLATE = (
     "Hi {first_name} — floating this back up. {hook}, and roles like that "
     "don't stay open long. Worth a quick chat this week?"
@@ -102,16 +90,11 @@ DEFAULT_FOLLOWUP2_TEMPLATE = (
 )
 FOLLOWUP_DAYS = 3
 MAX_FOLLOWUPS = 2   # after follow-up #2 (breakup), lead leaves the queue
-FRESH_DAYS = 7      # legacy UI constant; current evidence uses 48-hour checks
 DEFAULT_MEETING_RATE = 150
 DAILY_QUEUE_CAP = 15   # operator's default initial-send budget, not a platform limit
 
-STAGES = ["contacted", "replied", "won"]
 # legacy stage names from earlier versions -> current
 LEGACY_MAP = {"call booked": "replied", "showed": "won", "snoozed": "new"}
-
-# prospect pipeline stages (OUR outreach to agencies) — distinct from leads
-PROSPECT_STAGES = ["contacted", "replied", "call_booked", "client_won"]
 
 DEFAULT_PROSPECT_DM = (
     "Hi {first_name} — {hook}. We run signal-based outbound for recruitment "
@@ -133,25 +116,7 @@ DEFAULT_PROSPECT_FOLLOWUP2 = (
 
 PLATFORMS = ["greenhouse", "lever", "ashby", "workable"]
 
-# App-wide stage colors (also the badge palette; keep in sync with Help page)
-STAGE_COLORS = {
-    "new": "#D8FF3E",
-    "contacted": "#4A90D9",
-    "replied": "#F5A623",
-    "won": "#3CB371",
-    "dismissed": "#999999",
-    # prospect-only stages
-    "call_booked": "#7A5FD0",
-    "client_won": "#3CB371",
-}
-# light backgrounds get dark text, the rest white
-_BADGE_FG = {"new": "#111111", "replied": "#111111"}
-
-# outreach channel (per-client) — badge palette (amber = the theme's
-# highlight color; ink = both channels at once)
 CHANNELS = ["linkedin", "email", "both"]
-CHANNEL_COLORS = {"linkedin": "#4A90D9", "email": "#F2B705", "both": "#0A0A0A"}
-_CHANNEL_FG = {"email": "#111111"}
 
 # ============================ profiles ============================
 
@@ -168,15 +133,11 @@ def load_profile(name):
                     expected_type=dict)
     cfg.setdefault("client_id", name)
     cfg.setdefault("dm_template", DEFAULT_TEMPLATE)
-    cfg.setdefault("email_subject", DEFAULT_EMAIL_SUBJECT)
-    cfg.setdefault("email_template", DEFAULT_EMAIL_TEMPLATE)
     cfg.setdefault("followup_template", DEFAULT_FOLLOWUP_TEMPLATE)
     cfg.setdefault("followup2_template", DEFAULT_FOLLOWUP2_TEMPLATE)
     cfg.setdefault("meeting_rate", DEFAULT_MEETING_RATE)
-    # optional delivery fields (added by the channel-ready delivery layer;
-    # absent in older config files, which stay valid)
+    # Manual outreach channel; absent in older config files.
     cfg.setdefault("channel", "linkedin")
-    cfg.setdefault("campaign_id", "")
     for k, v in DEFAULTS.items():
         cfg.setdefault(k, v if not isinstance(v, (list, dict)) else type(v)())
     return cfg
@@ -228,7 +189,8 @@ def lead_key(row):
 def load_leads():
     """signals.csv is the source of truth; contacts are joined in live from
     enriched_contacts.json, so new signals never wait on an enrichment
-    re-run. Falls back to enriched_signals.csv if signals.csv is missing."""
+    re-run. A legacy enriched_signals.csv can be read only when signals.csv
+    is absent; new enrichment never writes that redundant file."""
     src = SIGNALS_CSV if SIGNALS_CSV.exists() else ENRICHED_CSV
     if not src.exists():
         return [], src.name
@@ -272,11 +234,6 @@ def load_status(path=None, *, with_revisions=False):
     return (out, raw_revisions) if with_revisions else out
 
 
-def save_status(status, path=None):
-    """Atomically replace a complete status map (legacy/bulk callers only)."""
-    atomic_write_json(path or INBOX_STATUS, status, indent=1)
-
-
 def status_revision(status, key):
     return revision(status.get(key))
 
@@ -308,26 +265,6 @@ def restore_status_record(status, key, previous, path=None, *, expected):
     return entry, saved_revision
 
 
-def transition_status_if(status, key, allowed, fields, path=None):
-    """Atomically apply a transition only from one of the allowed stages."""
-    path = Path(path or INBOX_STATUS)
-    changed = {"value": False}
-
-    def mutate(current):
-        entry = current if isinstance(current, dict) else {
-            "status": "new", "on": "", "notes": ""}
-        if effective_status(entry) not in allowed:
-            return entry
-        entry.update(fields)
-        changed["value"] = True
-        return entry
-
-    latest, entry, _ = update_json_record(path, key, mutate)
-    status.clear()
-    status.update(latest)
-    return changed["value"], entry
-
-
 def effective_status(entry) -> str:
     if not entry:
         return "new"
@@ -348,10 +285,6 @@ def followup_due(entry, *, now=None) -> bool:
         return (today - datetime.strptime(on, "%Y-%m-%d").date()).days >= FOLLOWUP_DAYS
     except ValueError:
         return False
-
-
-def all_clients(leads):
-    return sorted(set(list_profiles()) | {r.get("client", "default") for r in leads})
 
 
 def display_hook(row):
@@ -392,49 +325,6 @@ def mailto_link(email, subject, body):
     return f"mailto:{email}?subject={quote(subject)}&body={quote(body)}"
 
 
-# --------- delivery layer (email tools plug in via .env keys) ---------
-
-def delivery_adapters():
-    """All adapters, bound to this app's .env (AAL_DATA_DIR-aware)."""
-    return delivery.all_adapters(env_file=ENV_FILE)
-
-
-def active_email_adapter():
-    """First configured email adapter, or None (manual excluded)."""
-    return delivery.active_email_adapter(env_file=ENV_FILE)
-
-
-def apply_replies(adapter, campaign_id=None):
-    """Poll the adapter for replies and move matched leads to 'replied'.
-
-    Matches on contact email; only leads currently 'new' or 'contacted'
-    are advanced (never downgrades 'won'/'dismissed'). Writes status
-    directly (no toast/undo) so it's usable from the CLI too — the app
-    shows its own toast afterwards. Returns a summary dict."""
-    try:
-        emails = adapter.sync_replies(campaign_id)
-    except Exception as e:  # network/HTTP/parse — surface, don't crash
-        return {"error": f"{e.__class__.__name__}: {e}", "matched": 0}
-    email_set = {str(e).strip().lower() for e in (emails or []) if e}
-    if not email_set:
-        return {"emails": 0, "matched": 0, "changed": []}
-    leads, _ = load_leads()
-    changed = []
-    for r in leads:
-        em = (r.get("contact1_email") or "").strip().lower()
-        if not em or em not in email_set:
-            continue
-        k = lead_key(r)
-        status = load_status()
-        advanced, _ = transition_status_if(
-            status, k, {"new", "contacted"},
-            {"status": "replied", "on": date.today().isoformat()})
-        if advanced:
-            changed.append(r)
-    return {"emails": len(email_set), "matched": len(changed),
-            "changed": changed}
-
-
 # --------- manual contacts (Apollo API enrichment is plan-gated) ---------
 
 def load_contacts_cache():
@@ -456,9 +346,8 @@ def update_company_contacts(company, mutator):
 
 
 # ======================= stage mutations (pure) =======================
-# The file-writing half of set_stage / mark_followed_up. No toast, no undo,
-# no Streamlit — so scheduled jobs and CLI tools can advance a stage too.
-# The UI wrappers in common.py add the snapshot and the toast on top.
+# File-writing stage operations, without Streamlit. The UI stage wrapper
+# in common.py adds an undo snapshot and toast.
 
 def apply_stage(status, key, stage, notes=None, path=None):
     """Set a stage and stamp today's date. Mutates `status`, writes the file."""

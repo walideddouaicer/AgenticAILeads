@@ -36,13 +36,12 @@ python3.13 -m venv .venv
 
 `scripts/check.py` copies source into a temporary directory, clears provider
 credentials, blocks network connections in Python child processes, and runs
-syntax, unit, mocked-delivery, page/interaction and known-gap checks. It does not
+syntax, unit, page/interaction and workflow regression checks. It does not
 copy working runtime data or private probe files. Optional `--logs-dir PATH`
 retains detailed results. Do not run fixture-generating tests on working data.
 
-Expected failures in `tests/test_workflow_gaps.py` are unresolved release blockers.
-When implementing their contracts, remove the corresponding expected-failure
-marker and keep the regression. Do not skip assertions just to obtain green tests.
+The Phase 3 queue and budget regressions in `tests/test_workflow_gaps.py`
+must remain passing. Do not skip assertions just to obtain green tests.
 No tests may send outreach or spend provider credits. Keep checks focused on
 behavioural risk; preserve the assertion/AppTest style already in the repository.
 
@@ -65,3 +64,6 @@ Older `REVAMP.md`/`PLAYBOOK.md` describe history and ideas, not current acceptan
 criteria. The user-approved implementation plan supersedes obsolete frozen-rule
 instructions. Make ordinary in-scope implementation choices without repeatedly
 asking the user. Stop at a phase checkpoint when the user requested that phase.
+The README is the current operator guide. The only supported pages are
+Prospects, Clients, Signals and Settings. Legacy page, email-sequence send and
+reply-sync paths are removed; preserve the manual workflow and data readers.

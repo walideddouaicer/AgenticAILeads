@@ -1,6 +1,6 @@
 # Implementation status
 
-Updated: 23 September 2026. Scope: Phases 0–5 through first-client delivery.
+Updated: 23 September 2026. Scope: Phases 0–6 through dead-path cleanup.
 
 ## Checkpoints
 
@@ -21,7 +21,9 @@ Updated: 23 September 2026. Scope: Phases 0–5 through first-client delivery.
 - Phase 4 interface checkpoint: `Consolidate acquisition screens and CSV import gbt 11.0`.
   Hash: `9dc1752`.
 - Phase 5 client-delivery checkpoint: `Complete first-client delivery and meeting records gbt 12.0`.
-  Hash is reported with the commit. Next suffix: `gbt 13.0`.
+  Hash: `e832abf`.
+- Phase 6 cleanup checkpoint: `Remove superseded paths and align operator guide gbt 13.0`.
+  Hash is reported with the commit. Next suffix: `gbt 14.0`.
 
 | Phase | Status |
 |---|---|
@@ -31,7 +33,7 @@ Updated: 23 September 2026. Scope: Phases 0–5 through first-client delivery.
 | 3 — unified queue and durable actions | Implemented offline through `gbt 10.0` |
 | 4 — interface consolidation | Implemented offline at `gbt 11.0` |
 | 5 — minimum client delivery | Implemented offline at `gbt 12.0` |
-| 6 — dead paths and documentation | Not started |
+| 6 — dead paths and documentation | Implemented offline at `gbt 13.0` |
 | 7 — Linux operation and recovery | Not started |
 | 8 — release rehearsal | Not started |
 
@@ -308,7 +310,32 @@ filtering. No live provider call, actual outreach, push, deployment or
 scheduling occurred. The old client page files remain for Phase 6 removal;
 live source compatibility and founder acceptance are still unverified.
 
+## Phase 6 result
+
+- Removed superseded Today, Home, watchlist, live jobs, mini-list, help,
+  queue, inbox, client configuration and old client report pages. The four
+  supported pages still render under the app navigation. CLI engines and the
+  derived `today.json` queue export remain available.
+- Removed live Instantly, Smartlead and Apollo sequence send/reply-sync code
+  and its vendor-only tests. The manual prospect/client send records and
+  client report CSV remain. `common.py` now contains UI helpers; active pages
+  import domain behavior from `core.py` explicitly.
+- Contact enrichment now updates `enriched_contacts.json` only. The app joins
+  that cache when loading `signals.csv`. If `signals.csv` is absent, the
+  legacy `enriched_signals.csv` remains readable so historical data is not
+  discarded; it is no longer written.
+- Replaced the README with the current install, configure, acquisition,
+  delivery and recovery guide. Marked old planning and deployment notes as
+  historical, updated the environment example and aligned agent guidance.
+
+Verification: isolated offline suite passed on Windows Python 3.12.14,
+including final four-page tests and the Phase 3 queue/budget regressions.
+Supported CLI entry points responded to `--help`. No live ATS/provider check,
+external outreach, push, deployment or scheduling occurred in this phase.
+Full backup/restore and Linux installation remain Phase 7 work; founder
+acceptance remains Phase 8 work.
+
 ## Next phase
 
-Phase 6: remove superseded screens and unsupported vendor send/reply-sync
-paths after confirming the replacement client screen covers the required work.
+Phase 7: portable Linux setup, secure local/shared startup and complete
+operational backup/restore, with no scheduling or deployment performed here.

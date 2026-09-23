@@ -2,7 +2,7 @@
 """
 Agentic AI Leads — shared sweep primitives + the job history recorder.
 
-Deliberately Streamlit-free and common-free (same rule as delivery.py):
+Deliberately Streamlit-free and common-free:
 pure functions, CLI- and unit-testable, importable by any engine.
 common.py may import this; this must never import common.
 

@@ -278,17 +278,6 @@ def t_core_is_streamlit_free():
     assert not banned, f"core.py must not import {banned}"
 
 
-def t_common_reexports_core():
-    """Pages call C.lead_key(...) etc. — the re-export must stay complete."""
-    import core, common
-    from types import ModuleType
-    missing = [n for n in dir(core)
-               if not n.startswith("_")
-               and not isinstance(getattr(core, n), ModuleType)
-               and not hasattr(common, n)]
-    assert not missing, f"common.py stopped re-exporting: {missing}"
-
-
 def t_stage_mutators_agree():
     """core.apply_stage and the UI wrapper must write the same thing."""
     import core
@@ -413,15 +402,6 @@ check("location: first real place wins", t_best_location_prefers_a_real_place)
 
 check("core.py imports no streamlit/common", t_core_is_streamlit_free)
 check("stage mutators write correctly", t_stage_mutators_agree)
-
-# The re-export check needs common.py, which needs Streamlit. Skip it when
-# Streamlit isn't installed rather than failing the run — the point of the
-# split is that everything above this line works without it.
-try:
-    import streamlit  # noqa: F401
-    check("common.py re-exports all of core", t_common_reexports_core)
-except ImportError:
-    print("  skip common.py re-export check (streamlit not installed)")
 
 check("history: first sighting recorded", t_first_sight)
 check("history: same-day re-run is idempotent", t_same_day_rerun_is_idempotent)

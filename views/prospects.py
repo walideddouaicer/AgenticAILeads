@@ -12,6 +12,7 @@ from datetime import date
 import streamlit as st
 
 import common as C
+import core
 import outreach
 import prospect_import
 from minilist_engine import (render_csv, render_table, reviewable_rows,
@@ -20,14 +21,14 @@ from storage import ConflictError, DataFileError
 
 C.page_header("🧲 Prospects", "prospects")
 
-prospects = C.load_prospects()
-signals = C.load_prospect_signals()
-status, raw_revisions = C.load_status(C.PROSPECTS_STATUS,
+prospects = core.load_prospects()
+signals = core.load_prospect_signals()
+status, raw_revisions = core.load_status(core.PROSPECTS_STATUS,
                                       with_revisions=True)
-pcfg = C.load_prospects_config()
+pcfg = core.load_prospects_config()
 
 # Keep acquisition tools secondary to today's work.
-icp = C.load_icp()
+icp = core.load_icp()
 with st.expander("Add or find agencies", expanded=not prospects):
     st.caption("Import a CSV or add one person manually. Apollo lookup is optional.")
     st.caption("Save a manual entry before leaving this screen.")
@@ -104,10 +105,10 @@ if not prospects:
 
 by_key = {}
 for p in prospects:
-    k = C.prospect_key(p)
+    k = core.prospect_key(p)
     by_key[k] = p   # duplicate rows (same person) collapse to the last one
 
-mandates = {k: C.mandates_for_agency(p.get("agency", ""), signals)
+mandates = {k: core.mandates_for_agency(p.get("agency", ""), signals)
             for k, p in by_key.items()}
 
 
@@ -138,7 +139,7 @@ for item in queue["followups"] + queue["new"]:
     contexts[item["key"]] = item["context"]
 
 today_iso = outreach.local_now().date().isoformat()
-stage_of = {k: C.effective_status(status.get(k)) for k in by_key}
+stage_of = {k: core.effective_status(status.get(k)) for k in by_key}
 n_due = len(queue["followups"]) + len(queue["blocked_followups"])
 touched = sum(1 for e in status.values()
               if e.get("on") == today_iso
@@ -158,8 +159,8 @@ m[2].metric("replied", sum(1 for s in stage_of.values() if s == "replied"),
             help="They answered. Handle these first — an unanswered reply "
                  "is the most expensive thing on this page.")
 m[3].metric("follow-ups due", n_due,
-            help=f"Contacted ≥{C.FOLLOWUP_DAYS} days ago, under "
-                 f"{C.MAX_FOLLOWUPS} follow-ups. A follow-up never costs a "
+            help=f"Contacted ≥{core.FOLLOWUP_DAYS} days ago, under "
+                 f"{core.MAX_FOLLOWUPS} follow-ups. A follow-up never costs a "
                  "LinkedIn connection request — those are spent only on "
                  "first contact, so following up is free capacity.")
 booked = sum(1 for s in stage_of.values()
@@ -187,7 +188,7 @@ if u and st.button(f"↩ Undo: {u['label']}", key="p_undo",
 def persist_draft(k, kind, widget_key, sample):
     try:
         outreach.save_draft(status, k, kind, st.session_state[widget_key],
-                            expected=raw_revisions.get(k, C.revision(None)),
+                            expected=raw_revisions.get(k, core.revision(None)),
                             sample=sample)
     except ConflictError:
         st.session_state[f"draft_conflict_{k}"] = True
@@ -198,8 +199,8 @@ def persist_draft(k, kind, widget_key, sample):
 def prospect_card(k, p, kind, i, *, allow_send=True):
     """kind: 'fu' | 'new' | 'play'."""
     entry = status.get(k)
-    eff = C.effective_status(entry)
-    due = C.followup_due(entry, now=outreach.local_now())
+    eff = core.effective_status(entry)
+    due = core.followup_due(entry, now=outreach.local_now())
     agency = p.get("agency", "?")
     person = p.get("person_name", "?")
     label = f"{person} @ {agency}"
@@ -222,7 +223,7 @@ def prospect_card(k, p, kind, i, *, allow_send=True):
             f"found {p.get('date_found', '')}"] if x)
         if meta:
             st.caption(meta)
-        if kind == "new" and not C.matches_icp(p, icp):
+        if kind == "new" and not core.matches_icp(p, icp):
             st.warning("This prospect no longer matches the current criteria. "
                        "Review the fit before sending.")
         lk = (p.get("linkedin") or "").strip()
@@ -261,7 +262,7 @@ def prospect_card(k, p, kind, i, *, allow_send=True):
                             "{sample_summary"))
         draft_widget_key = f"draft_{context['draft_kind']}_{k}"
         if sample_claim:
-            draft_widget_key += f"_{C.revision(reviewed)[:8]}"
+            draft_widget_key += f"_{core.revision(reviewed)[:8]}"
         included_sample = False
         if kind != "play":
             if template_invalid:
@@ -281,7 +282,7 @@ def prospect_card(k, p, kind, i, *, allow_send=True):
                     try:
                         outreach.save_draft(
                             status, k, context["draft_kind"], draft,
-                            expected=raw_revisions.get(k, C.revision(None)),
+                            expected=raw_revisions.get(k, core.revision(None)),
                             sample=reviewed)
                     except ConflictError:
                         st.error("This prospect changed in another session. Reload and edit again.")
@@ -315,8 +316,8 @@ def prospect_card(k, p, kind, i, *, allow_send=True):
             if st.button("Save", key=f"nk_save_{k}",
                          help="Persists the override in "
                               "prospects_status.json."):
-                C.update_status_fields(status, k, {"niche": niche_in},
-                                       C.PROSPECTS_STATUS)
+                core.update_status_fields(status, k, {"niche": niche_in},
+                                       core.PROSPECTS_STATUS)
                 C.push_toast(f"Niche saved for {agency}", "🏷")
                 st.rerun()
 
@@ -379,10 +380,10 @@ def prospect_card(k, p, kind, i, *, allow_send=True):
                                 changes.pop(selected_id, None)
                             value = {"approved": chosen, "corrections": changes}
                             try:
-                                C.update_status_fields(
+                                core.update_status_fields(
                                     status, k, {"sample_review": value},
-                                    C.PROSPECTS_STATUS,
-                                    expected=raw_revisions.get(k, C.revision(None)))
+                                    core.PROSPECTS_STATUS,
+                                    expected=raw_revisions.get(k, core.revision(None)))
                             except ConflictError:
                                 st.error("This prospect changed in another "
                                          "session. Reload and review again.")
@@ -430,13 +431,13 @@ def prospect_card(k, p, kind, i, *, allow_send=True):
                                        not hook or template_invalid or draft_conflict or
                                        (sample_claim and not included_sample)),
                              help="Records the final message and resets the "
-                                  f"{C.FOLLOWUP_DAYS}-day timer."):
+                                  f"{core.FOLLOWUP_DAYS}-day timer."):
                     try:
                         C.record_prospect_send(status, k, message=draft,
                                                sample=reviewed if included_sample else [],
                                                channel=channel,
                                                lead_label=label,
-                                               expected=raw_revisions.get(k, C.revision(None)))
+                                               expected=raw_revisions.get(k, core.revision(None)))
                     except (ConflictError, ValueError) as error:
                         st.error(str(error))
                     else:
@@ -447,7 +448,7 @@ def prospect_card(k, p, kind, i, *, allow_send=True):
                              help="Moves the prospect to 'replied' for "
                                   "conversation handling."):
                     C.set_stage(status, k, "replied", lead_label=label,
-                                path=C.PROSPECTS_STATUS)
+                                path=core.PROSPECTS_STATUS)
                     st.rerun()
         elif kind == "new":
             with b1:
@@ -463,7 +464,7 @@ def prospect_card(k, p, kind, i, *, allow_send=True):
                                                sample=reviewed if included_sample else [],
                                                channel=channel,
                                                lead_label=label,
-                                               expected=raw_revisions.get(k, C.revision(None)))
+                                               expected=raw_revisions.get(k, core.revision(None)))
                     except (ConflictError, ValueError) as error:
                         st.error(str(error))
                     else:
@@ -473,7 +474,7 @@ def prospect_card(k, p, kind, i, *, allow_send=True):
                              help="Bad fit / wrong person — out of the "
                                   "queue. Undo available after."):
                     C.set_stage(status, k, "dismissed", lead_label=label,
-                                path=C.PROSPECTS_STATUS)
+                                path=core.PROSPECTS_STATUS)
                     st.rerun()
         else:  # play: replied -> call_booked -> client_won
             with b1:
@@ -482,7 +483,7 @@ def prospect_card(k, p, kind, i, *, allow_send=True):
                         width="stretch",
                         help="The discovery call is on the calendar."):
                     C.set_stage(status, k, "call_booked", notes,
-                                lead_label=label, path=C.PROSPECTS_STATUS)
+                                lead_label=label, path=core.PROSPECTS_STATUS)
                     st.rerun()
                 if eff == "call_booked" and st.button(
                         "🎉 Client won", key=f"pcw_{k}", type="primary",
@@ -490,14 +491,14 @@ def prospect_card(k, p, kind, i, *, allow_send=True):
                         help="They're a client — set up their profile "
                              "from Clients."):
                     C.set_stage(status, k, "client_won", notes,
-                                lead_label=label, path=C.PROSPECTS_STATUS)
+                                lead_label=label, path=core.PROSPECTS_STATUS)
                     st.rerun()
             with b2:
                 if st.button("🚫 Dismiss", key=f"pdx2_{k}", width="stretch",
                              help="Conversation went nowhere — close it "
                                   "out."):
                     C.set_stage(status, k, "dismissed", notes,
-                                lead_label=label, path=C.PROSPECTS_STATUS)
+                                lead_label=label, path=core.PROSPECTS_STATUS)
                     st.rerun()
 
 
@@ -585,7 +586,7 @@ if view == "All":
             "person": p.get("person_name", ""),
             "title": p.get("person_title", ""),
             "stage": stage_of[k].replace("_", " ")
-                     + (" · follow-up due" if C.followup_due(
+                     + (" · follow-up due" if core.followup_due(
                          entry, now=outreach.local_now()) else ""),
             "since": entry.get("on", ""),
             "mandates": len(mandates[k]),
@@ -595,7 +596,7 @@ if view == "All":
             "next_step": "; ".join(
                 queue["blocked"].get(k, [])
                 + (["Review against current criteria"]
-                   if not C.matches_icp(p, icp) else [])),
+                   if not core.matches_icp(p, icp) else [])),
         })
     st.caption(f"{len(rows)} of {len(by_key)} prospect(s)")
     st.dataframe(rows, width="stretch", height=420, hide_index=True,
@@ -642,12 +643,12 @@ if view == "All":
             key=f"correct_email_{selected_key}")
         if st.button("Save correction", key=f"correct_save_{selected_key}"):
             try:
-                C.correct_prospect_identity(
+                core.correct_prospect_identity(
                     selected_key,
                     {"person_name": corrected_name,
                      "linkedin": corrected_linkedin,
                      "email": corrected_email},
-                    expected=C.prospect_row_revision(selected))
+                    expected=core.prospect_row_revision(selected))
             except (ConflictError, ValueError) as error:
                 st.error(str(error))
             else:

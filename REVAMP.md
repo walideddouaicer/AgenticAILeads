@@ -1,3 +1,6 @@
+# Historical planning notes — superseded by IMPLEMENTATION_PLAN.md and README.md.
+# Do not use these old page and integration instructions to operate the current app.
+
 # REVAMP — from CRM to daily driver
 
 **Status:** plan, not yet executed. Written 2026-08-09.

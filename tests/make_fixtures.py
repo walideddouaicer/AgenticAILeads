@@ -39,8 +39,8 @@ d = lambda n: (today - timedelta(days=n)).isoformat()
     "inclusion_keywords": ["java", "backend"], "exclusion_keywords": [],
     "allowed_locations": ["united states", "remote"],
     "keyword_weights": {}, "min_score": 0, "meeting_rate": 200,
-    # delivery layer: email channel with a campaign id
-    "channel": "both", "campaign_id": "camp-fixture-123",
+    # manual outreach may use either channel
+    "channel": "both",
 }, indent=2), encoding="utf-8")
 
 # --- watchlist ---
