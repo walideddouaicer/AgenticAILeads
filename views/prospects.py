@@ -15,7 +15,8 @@ import common as C
 import core
 import outreach
 import prospect_import
-from minilist_engine import (render_csv, render_table, reviewable_rows,
+from minilist_engine import (render_email_table, render_prospect_csv,
+                             render_prospect_text, reviewable_rows,
                              sample_row_id)
 from storage import ConflictError, DataFileError
 
@@ -398,15 +399,25 @@ def prospect_card(k, p, kind, i, *, allow_send=True):
                                for c in agency.lower()).strip("-") or "prospect"
                 fname = f"minilist_{slug}_{date.today().isoformat()}"
                 if reviewed:
-                    st.code(render_table(reviewed), language=None)
+                    st.markdown("**What the prospect sees**")
+                    st.caption("Source boards and check times stay in your "
+                               "review table and the recorded send.")
+                    C.copy_table_button(render_email_table(reviewed),
+                                        render_prospect_text(reviewed),
+                                        "Copy table for email",
+                                        key=f"sample_{k}")
+                    st.html(render_email_table(reviewed))
+                    st.caption("LinkedIn messages cannot show tables; copy "
+                               "this text instead.")
+                    st.code(render_prospect_text(reviewed), language=None)
                 else:
                     st.info("No approved sample rows yet. Review the source "
                             "and save an approval above.")
                 st.download_button(
-                    "⬇ Reviewed sample CSV", render_csv(reviewed),
+                    "⬇ Sample CSV for the prospect", render_prospect_csv(reviewed),
                     file_name=f"{fname}.csv", mime="text/csv",
                     key=f"mlc_{k}", width="stretch", disabled=not reviewed,
-                    help="Exports only approved rows and keeps source proof.")
+                    help="Approved rows only, without internal source details.")
             else:
                 st.caption("No tracked jobs match these niche keywords — "
                            "widen them or add employer boards in Signals.")

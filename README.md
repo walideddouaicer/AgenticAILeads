@@ -30,7 +30,7 @@ Open the local URL printed by Streamlit and sign in. The Windows equivalent is t
 
 1. In **Prospects**, import an agency CSV or add a person manually. Apollo search is optional. Check the agency and person details.
 2. Use **Signals** to add or discover agency boards, then refresh agency postings. Confirm board mappings before using a mandate as evidence.
-3. Review the prospect's current evidence and sample in **Prospects**. Correct missing contacts or niche details, edit the final message, and send it yourself through the selected channel.
+3. Review the prospect's current evidence and sample in **Prospects**. Correct missing contacts or niche details, edit the final message, and send it yourself through the selected channel. Under **What the prospect sees**, copy the approved sample as a table for email or as plain text for LinkedIn; source boards and check times stay internal.
 4. Record the send only after it happened. Work replies and follow-ups on the same screen; a reply that arrives before a follow-up is due is recorded from **All**. Mark a client won when agreed. **Settings** holds prospect criteria and editable message templates.
 
 The app does not send messages, enroll people in email sequences, or sync replies. The send record preserves the actual message and sample used.

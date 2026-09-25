@@ -289,6 +289,96 @@ def render_csv(rows) -> str:
     return buf.getvalue()
 
 
+# What a prospect receives. Source boards, check times and review notes stay
+# in the operator's review table and the recorded send, never in this output.
+PROSPECT_COLUMNS = ("Company", "Role", "Other matching roles", "Location",
+                    "Job link", "Contact", "Contact title", "Contact email",
+                    "Contact LinkedIn")
+
+
+def _usable_email(value):
+    value = str(value or "").strip()
+    return value if "@" in value and "locked" not in value.casefold() else ""
+
+
+def prospect_rows(rows):
+    """Reviewed rows reduced to the prospect-facing columns."""
+    return [{
+        "Company": r.get("company", ""),
+        "Role": r.get("hiring_now", ""),
+        "Other matching roles": r.get("more_matching_roles") or 0,
+        "Location": r.get("location", ""),
+        "Job link": r.get("job_url", ""),
+        "Contact": r.get("contact_name", ""),
+        "Contact title": r.get("contact_title", ""),
+        "Contact email": _usable_email(r.get("contact_email")),
+        "Contact LinkedIn": r.get("contact_linkedin", ""),
+    } for r in rows]
+
+
+def render_prospect_text(rows) -> str:
+    """Plain text for LinkedIn and other messages that cannot hold a table."""
+    out = []
+    for r in prospect_rows(rows):
+        more = r["Other matching roles"]
+        line = f"• {r['Company']} — {r['Role']}"
+        if more:
+            line += f" (+{more} more role{'s' if more != 1 else ''})"
+        if r["Location"]:
+            line += f" — {r['Location']}"
+        if r["Contact"]:
+            contact = r["Contact"] + (f", {r['Contact title']}"
+                                      if r["Contact title"] else "")
+            details = " · ".join(x for x in (r["Contact email"],
+                                             r["Contact LinkedIn"]) if x)
+            line += f"\n  Contact: {contact}" + (f" · {details}" if details else "")
+        if r["Job link"]:
+            line += f"\n  {r['Job link']}"
+        out.append(line)
+    return "\n".join(out)
+
+
+def render_prospect_csv(rows) -> str:
+    if not rows:
+        return ""
+    return render_csv(prospect_rows(rows))
+
+
+def render_email_table(rows) -> str:
+    """Inline-styled HTML table that keeps its shape when pasted into email."""
+    e = html.escape
+    cell = ("border:1px solid #d0d0d0;padding:6px 10px;text-align:left;"
+            "vertical-align:top;")
+    head = "".join(f'<th style="{cell}background:#f2f2f2;">{e(h)}</th>'
+                   for h in ("Company", "Role", "Location", "Contact", "Job"))
+    body = []
+    for r in prospect_rows(rows):
+        role = e(r["Role"])
+        if r["Other matching roles"]:
+            role += f" (+{int(r['Other matching roles'])} more)"
+        contact = e(r["Contact"])
+        if r["Contact title"]:
+            contact += f"<br>{e(r['Contact title'])}"
+        if r["Contact email"]:
+            contact += f"<br>{e(r['Contact email'])}"
+        linkedin = _safe_href(r["Contact LinkedIn"])
+        if linkedin:
+            contact += f'<br><a href="{linkedin}">LinkedIn</a>'
+        job = _safe_href(r["Job link"])
+        body.append(
+            f'<tr><td style="{cell}">{e(r["Company"])}</td>'
+            f'<td style="{cell}">{role}</td>'
+            f'<td style="{cell}">{e(r["Location"])}</td>'
+            f'<td style="{cell}">{contact or "&mdash;"}</td>'
+            f'<td style="{cell}">'
+            + (f'<a href="{job}">View job</a>' if job else "&mdash;")
+            + "</td></tr>")
+    return ('<table style="border-collapse:collapse;font-family:Arial,'
+            'sans-serif;font-size:13px;color:#111;">'
+            f"<thead><tr>{head}</tr></thead><tbody>{''.join(body)}"
+            "</tbody></table>")
+
+
 def _safe_href(value):
     value = str(value or "").strip()
     return html.escape(value, quote=True) if value.startswith(

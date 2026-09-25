@@ -180,6 +180,31 @@ def test_csv_formula_is_escaped_without_changing_source_row():
     assert row["company"].startswith("=")
 
 
+def test_prospect_outputs_hide_internal_evidence_fields():
+    row = {"company": "Acme <b>", "hiring_now": "Java Engineer",
+           "more_matching_roles": 2, "location": "London",
+           "job_url": "https://jobs.test/1", "contact_name": "Jane Doe",
+           "contact_title": "Head of Talent", "contact_email": "jane@acme.test",
+           "contact_linkedin": "https://www.linkedin.com/in/jane",
+           "source_board": "greenhouse:acme", "source_platform": "greenhouse",
+           "verified_at": "2026-09-23T00:00:00+00:00",
+           "evidence_status": "current board check",
+           "identity_status": "confirmed", "review_note": "approved"}
+    text = minilist_engine.render_prospect_text([row])
+    table = minilist_engine.render_email_table([row])
+    exported = list(csv.DictReader(io.StringIO(
+        minilist_engine.render_prospect_csv([row]))))
+    assert list(exported[0]) == list(minilist_engine.PROSPECT_COLUMNS)
+    for output in (text, table, str(exported)):
+        for internal in ("greenhouse:acme", "2026-09-23", "confirmed",
+                         "current board check", "approved"):
+            assert internal not in output, (internal, output)
+        assert "jane@acme.test" in output and "https://jobs.test/1" in output
+    assert "(+2 more roles)" in text and "Acme &lt;b&gt;" in table
+    locked = {**row, "contact_email": "email_not_unlocked@domain.com"}
+    assert "unlocked" not in minilist_engine.render_prospect_text([locked])
+
+
 def test_unknown_template_field_requires_correction():
     rendered = core.render_prospect_dm(
         "Hello {first_name}, {unavailable_field}",

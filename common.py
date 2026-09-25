@@ -626,3 +626,39 @@ def page_header(title: str, page_key: str):
             st.markdown(PAGE_BLURBS.get(
                 page_key, "This is a client delivery tool. Select a section "
                           "at the top of Clients to switch tasks."))
+
+
+def copy_table_button(table_html: str, plain_text: str, label: str,
+                      key: str) -> None:
+    """Copy a table as HTML (pastes as a table in email) plus plain text."""
+    import json
+    import re
+
+    ident = "copy-" + re.sub(r"[^A-Za-z0-9_-]", "-", key)
+    # Escape markup characters so board text can neither close the script
+    # nor trip the HTML sanitizer, which drops scripts containing tags.
+    payload = (json.dumps({"html": table_html, "text": plain_text})
+               .replace("<", "\\u003c").replace(">", "\\u003e")
+               .replace("&", "\\u0026"))
+    st.html(f"""
+<button id="{ident}" type="button" style="font:14px Archivo,Arial,sans-serif;
+  padding:8px 14px;border:1.5px solid #0A0A0A;background:#F4F2EC;
+  cursor:pointer;">{label}</button>
+<span id="{ident}-note" style="font:12px Arial,sans-serif;margin-left:8px;"></span>
+<script>
+(() => {{
+  const data = {payload};
+  const button = document.getElementById("{ident}");
+  const note = document.getElementById("{ident}-note");
+  button.onclick = async () => {{
+    try {{
+      await navigator.clipboard.write([new ClipboardItem({{
+        "text/html": new Blob([data.html], {{type: "text/html"}}),
+        "text/plain": new Blob([data.text], {{type: "text/plain"}})}})]);
+      note.textContent = "Copied. Paste it into your email.";
+    }} catch (error) {{
+      note.textContent = "Copy was blocked. Select the table below and copy it.";
+    }}
+  }};
+}})();
+</script>""", unsafe_allow_javascript=True)

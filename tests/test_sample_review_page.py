@@ -73,6 +73,9 @@ def main():
         downloads = [widget for widget in app.download_button
                      if widget.key == f"mlc_{key}"]
         assert downloads and not downloads[0].disabled
+        shown = "\n".join(str(block.value) for block in app.code)
+        assert "Source:" not in shown and "greenhouse:" not in shown, shown
+        assert "https://" in shown, "prospect text should keep the job link"
 
         title_input = [widget for widget in app.text_input
                        if widget.key == f"sample_hiring_now_{key}_{row_id}"]
