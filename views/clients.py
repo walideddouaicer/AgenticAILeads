@@ -1,6 +1,6 @@
 """Client profile, verified matches, outreach and actual meeting report."""
 
-from datetime import date
+from datetime import date, timedelta
 
 import streamlit as st
 
@@ -161,6 +161,27 @@ if view == "Profile & matches":
                 st.warning("Matching jobs need a successful recent refresh "
                            "before they can be backfilled.")
 
+STAGE_LABELS = {"new": "not contacted", "contacted": "contacted",
+                "replied": "replied", "won": "won (meeting attended)",
+                "dismissed": "dismissed"}
+
+
+def _short_location(text, limit=90):
+    """Long multi-city strings stay readable; the full text is in the job."""
+    text = str(text or "")
+    if len(text) <= limit:
+        return text
+    places = [part.strip() for part in text.split(";") if part.strip()]
+    shown, used = [], 0
+    for place in places:
+        if used + len(place) > limit and shown:
+            break
+        shown.append(place)
+        used += len(place) + 2
+    rest = len(places) - len(shown)
+    return "; ".join(shown) + (f" + {rest} more" if rest > 0 else "")
+
+
 if view == "Outreach":
     st.subheader("Client outreach")
     if not client_leads:
@@ -170,137 +191,219 @@ if view == "Outreach":
         q = st.text_input("Find a company or role", key="client_lead_search")
         visible = [row for row in client_leads if q.casefold() in (
             row.get("company", "") + " " + row.get("title", "")).casefold()]
-        st.caption(f"{len(visible)} of {len(client_leads)} client leads · {source}")
+        st.caption(f"{len(visible)} of {len(client_leads)} job leads for this "
+                   "client. Each lead is one job posting.")
         if not visible:
             st.info("No leads match this search.")
         else:
             options = {core.lead_key(row): row for row in visible}
-            key = st.selectbox("Selected lead", list(options),
-                               format_func=lambda value: (
-                                   f"{options[value].get('company')} — "
-                                   f"{options[value].get('title')}"),
-                               key="client_selected_lead")
+            key = st.selectbox(
+                "Job lead", list(options),
+                format_func=lambda value: (
+                    f"{options[value].get('company')} — "
+                    f"{options[value].get('title')}  ·  "
+                    + STAGE_LABELS.get(core.effective_status(
+                        status.get(value)), core.effective_status(
+                        status.get(value)))),
+                key="client_selected_lead")
             row = options[key]
             entry = status.get(key) or {}
             stage = core.effective_status(entry)
-            st.markdown(C.stage_badge(stage, core.followup_due(entry)),
-                        unsafe_allow_html=True)
-            st.write(f"**{row.get('company', '')}** — {row.get('title', '')} · "
-                     f"{row.get('location', '')}")
-            board = f"{row.get('platform', '')}:{row.get('company', '')}"
-            checked = verified_at(board, load_refreshes(core.BOARD_REFRESH_FILE))
-            st.caption(f"Source board: {board} · last verified: "
-                       f"{checked or 'not current'}")
-            if row.get("url"):
-                st.markdown(f"[Open source job ↗]({row['url']})")
-            st.caption("Opener: " + core.display_hook(row))
-            C.render_contact_editor(row, f"client_{key}")
+            due = core.followup_due(entry)
+
+            # 1. The job and where it came from.
+            with st.container(border=True):
+                st.markdown("**1 · Job**")
+                st.markdown(C.stage_badge(stage, due), unsafe_allow_html=True)
+                st.write(f"**{row.get('company', '')}** — {row.get('title', '')}")
+                if row.get("location"):
+                    st.caption(_short_location(row.get("location")))
+                board = f"{row.get('platform', '')}:{row.get('company', '')}"
+                checked = verified_at(board, load_refreshes(core.BOARD_REFRESH_FILE))
+                st.caption(f"Board {board} · "
+                           + (f"last checked {checked}" if checked else
+                              "not checked recently; refresh it in Signals "
+                              "before claiming the role is open"))
+                if row.get("url"):
+                    st.markdown(f"[Open the job posting ↗]({row['url']})")
+
+            # 2. Who to contact at the company.
             contact_name = row.get("contact1_name", "")
             linkedin = (row.get("contact1_linkedin") or "").strip()
             email = (row.get("contact1_email") or "").strip()
-            if contact_name:
-                st.write(f"Contact: **{contact_name}** — "
-                         f"{row.get('contact1_title', '')}")
-            else:
-                st.warning("Add a named decision-maker using the contact "
-                           "editor before recording outreach.")
-            if linkedin:
-                other_clients = D.contacted_elsewhere(
-                    leads, status, linkedin, client)
-                if other_clients:
-                    st.warning("This contact was already approached for "
-                               "client(s): " + ", ".join(other_clients)
-                               + ". Check before sending again.")
-            ready = stage == "new" or (stage == "contacted" and
-                                       core.followup_due(entry))
-            if ready:
-                kind = "initial" if stage == "new" else "followup"
-                fu = int(entry.get("fu", 0) or 0)
-                template = (config.get("dm_template", core.DEFAULT_TEMPLATE)
-                            if kind == "initial" else
-                            config.get("followup2_template", core.DEFAULT_FOLLOWUP2_TEMPLATE)
-                            if fu >= 1 else
-                            config.get("followup_template", core.DEFAULT_FOLLOWUP_TEMPLATE))
-                draft = (entry.get("drafts") or {}).get(kind) or core.render_dm(
-                    template, row)
-                # Key on the proposed text so adding a contact or saving a
-                # draft replaces a stale greeting instead of keeping it.
-                message = st.text_area("Final message", draft, height=140,
-                                       key=f"client_message_{key}_{kind}_"
-                                           f"{revision(draft)[:8]}")
-                template_invalid = message.startswith(
-                    core.TEMPLATE_CORRECTION[:26])
-                if template_invalid:
-                    st.error("Correct this client's message template in "
-                             "Profile & matches before recording a send.")
-                if st.button("Save draft", key=f"client_save_draft_{key}"):
-                    drafts = dict(entry.get("drafts") or {})
-                    drafts[kind] = message
-                    try:
-                        core.update_status_fields(status, key, {"drafts": drafts},
-                                               expected=raw_revisions.get(
-                                                   key, revision(None)))
-                    except ConflictError as error:
-                        st.error(str(error))
+            email_ok = "@" in email and "locked" not in email.casefold()
+            with st.container(border=True):
+                st.markdown("**2 · Contact**")
+                if contact_name:
+                    st.write(f"**{contact_name}**"
+                             + (f" — {row.get('contact1_title')}"
+                                if row.get("contact1_title") else ""))
+                    details = []
+                    if linkedin:
+                        details.append(f"[LinkedIn ↗]({linkedin})")
+                    if email_ok:
+                        details.append(email)
+                    if details:
+                        st.markdown(" · ".join(details))
+                else:
+                    st.caption("No contact yet. Add the decision-maker "
+                               "(head of talent, TA lead or founder). It is "
+                               "saved for every lead from this company's board.")
+                C.render_contact_editor(row, f"client_{key}")
+                if linkedin:
+                    other_clients = D.contacted_elsewhere(
+                        leads, status, linkedin, client)
+                    if other_clients:
+                        st.warning("This contact was already approached for "
+                                   "client(s): " + ", ".join(other_clients)
+                                   + ". Check before sending again.")
+
+            # 3. The message, then the record of the manual send.
+            with st.container(border=True):
+                st.markdown("**3 · Message and send**")
+                ready = stage == "new" or (stage == "contacted" and due)
+                if ready:
+                    kind = "initial" if stage == "new" else "followup"
+                    fu = int(entry.get("fu", 0) or 0)
+                    template = (config.get("dm_template", core.DEFAULT_TEMPLATE)
+                                if kind == "initial" else
+                                config.get("followup2_template",
+                                           core.DEFAULT_FOLLOWUP2_TEMPLATE)
+                                if fu >= 1 else
+                                config.get("followup_template",
+                                           core.DEFAULT_FOLLOWUP_TEMPLATE))
+                    if kind == "followup":
+                        st.caption(f"Follow-up #{fu + 1}"
+                                   + (" (final)" if fu >= 1 else ""))
+                    channels = [ch for ch in ("linkedin", "email")
+                                if config.get("channel", "linkedin") in (ch, "both")]
+                    send_channel = st.selectbox(
+                        "Send through", channels, key=f"client_channel_{key}",
+                        format_func=lambda ch: {"linkedin": "LinkedIn",
+                                                "email": "Email"}[ch])
+                    draft = (entry.get("drafts") or {}).get(kind) or core.render_dm(
+                        template, row)
+                    # Key on the proposed text so adding a contact or saving a
+                    # draft replaces a stale greeting instead of keeping it.
+                    message = st.text_area("Final message", draft, height=140,
+                                           key=f"client_message_{key}_{kind}_"
+                                               f"{revision(draft)[:8]}")
+                    template_invalid = message.startswith(
+                        core.TEMPLATE_CORRECTION[:26])
+                    if template_invalid:
+                        st.error("Correct this client's message template in "
+                                 "Profile & matches before recording a send.")
+                    address_ok = bool(linkedin) if send_channel == "linkedin" \
+                        else email_ok
+                    missing = []
+                    if not contact_name:
+                        missing.append("add a contact in section 2")
+                    elif not address_ok:
+                        missing.append("add the contact's " + (
+                            "LinkedIn URL" if send_channel == "linkedin"
+                            else "email address") + " in section 2")
+                    if not message.strip():
+                        missing.append("write the message")
+                    if template_invalid:
+                        missing.append("fix the message template")
+                    b1, b2, b3 = st.columns(3)
+                    with b1:
+                        C.copy_text_button(message, "Copy message",
+                                           key=f"client_msg_{key}")
+                    with b2:
+                        if st.button("Save draft", key=f"client_save_draft_{key}",
+                                     width="stretch",
+                                     help="Keeps this edited message for later "
+                                          "without recording a send."):
+                            drafts = dict(entry.get("drafts") or {})
+                            drafts[kind] = message
+                            try:
+                                core.update_status_fields(
+                                    status, key, {"drafts": drafts},
+                                    expected=raw_revisions.get(key, revision(None)))
+                            except ConflictError as error:
+                                st.error(str(error))
+                            else:
+                                C.push_toast("Client draft saved")
+                                st.rerun()
+                    with b3:
+                        record = st.button(
+                            "Record manual send", type="primary",
+                            width="stretch", disabled=bool(missing),
+                            help="Click after you have sent this message "
+                                 "yourself. Saves the exact text, contact "
+                                 "and channel.",
+                            key=f"client_record_send_{key}")
+                    if missing:
+                        st.caption("To record the send: " + "; ".join(missing) + ".")
                     else:
-                        C.push_toast("Client draft saved")
-                        st.rerun()
-                channels = [ch for ch in ("linkedin", "email")
-                            if config.get("channel", "linkedin") in (ch, "both")]
-                send_channel = st.selectbox("Manual send channel", channels,
-                                            key=f"client_channel_{key}")
-                address_ok = bool(linkedin) if send_channel == "linkedin" else (
-                    "@" in email and "locked" not in email.casefold())
-                if not address_ok:
-                    st.warning("Add a usable " + ("LinkedIn URL" if send_channel ==
-                               "linkedin" else "email address") + " for this contact.")
-                st.code(message, language=None)
-                if st.button("Record manual send", type="primary",
-                             disabled=not (contact_name and address_ok and
-                                           message.strip()) or template_invalid,
-                             help="Click only after sending the final message "
-                                  "outside this app.",
-                             key=f"client_record_send_{key}"):
-                    try:
-                        D.record_send(status, key, message=message,
-                                      channel=send_channel, contact=contact_name,
-                                      expected=raw_revisions.get(
-                                          key, revision(None)),
-                                      operator=st.session_state.get("_user") or
-                                      "local operator")
-                    except (ValueError, ConflictError) as error:
-                        st.error(str(error))
+                        st.caption("Send the message yourself, then click "
+                                   "Record manual send. The app never sends "
+                                   "messages.")
+                    if record:
+                        try:
+                            D.record_send(status, key, message=message,
+                                          channel=send_channel,
+                                          contact=contact_name,
+                                          expected=raw_revisions.get(
+                                              key, revision(None)),
+                                          operator=st.session_state.get("_user")
+                                          or "local operator")
+                        except (ValueError, ConflictError) as error:
+                            st.error(str(error))
+                        else:
+                            C.push_toast("Manual send recorded with its final message")
+                            st.rerun()
+                elif stage == "contacted":
+                    fu = int(entry.get("fu", 0) or 0)
+                    if fu >= core.MAX_FOLLOWUPS:
+                        st.info("Both follow-ups were sent. Record a reply or "
+                                "dismiss the lead below.")
                     else:
-                        C.push_toast("Manual send recorded with its final message")
-                        st.rerun()
-            elif stage == "contacted":
-                st.info("Follow-up is not due yet. The last send and its "
-                        "message are recorded below.")
-            notes = st.text_area("Lead notes", entry.get("notes", ""),
-                                 key=f"client_notes_{key}")
-            if st.button("Save notes", key=f"client_notes_save_{key}"):
-                core.update_status_fields(status, key, {"notes": notes})
-                C.push_toast("Lead notes saved")
-                st.rerun()
-            if stage != "dismissed":
-                choices = [item for item in ("contacted", "replied", "won",
-                                             "dismissed") if item != stage]
+                        try:
+                            next_due = (date.fromisoformat(entry.get("on", ""))
+                                        + timedelta(days=core.FOLLOWUP_DAYS))
+                        except ValueError:
+                            next_due = None
+                        st.info("Waiting for a reply. The next follow-up is "
+                                "due " + (next_due.isoformat() if next_due
+                                          else "after the follow-up delay") + ".")
+                else:
+                    st.caption("No message to send at this stage.")
+                actions = entry.get("activity") or []
+                if actions:
+                    with st.expander(f"Recorded sends ({len(actions)})"):
+                        for action in reversed(actions):
+                            st.caption(f"{action.get('at', '')} · "
+                                       f"{action.get('contact', '')} · "
+                                       f"{action.get('channel', '')}")
+                            st.code(action.get("message", ""), language=None)
+
+            # 4. What happened next.
+            with st.container(border=True):
+                st.markdown("**4 · Outcome and notes**")
+                notes = st.text_area("Notes", entry.get("notes", ""),
+                                     key=f"client_notes_{key}",
+                                     placeholder="Reply details, call time, "
+                                                 "objections…")
+                choices = [stage] + [item for item in
+                                     ("contacted", "replied", "won", "dismissed")
+                                     if item != stage]
                 outcome = st.selectbox(
-                    "Update outcome", choices, key=f"client_outcome_{key}",
-                    format_func=lambda item: ("won (meeting attended)"
-                                              if item == "won" else item))
-                if st.button("Save outcome", key=f"client_outcome_save_{key}"):
-                    C.set_stage(status, key, outcome, notes,
-                                lead_label=row.get("company", ""))
+                    "Stage", choices, key=f"client_outcome_{key}",
+                    format_func=lambda item: STAGE_LABELS.get(item, item)
+                    + (" (current)" if item == stage else ""),
+                    help="Use “won (meeting attended)” only after the meeting "
+                         "happened; then log it in Outcomes & report.")
+                if st.button("Save notes and stage",
+                             key=f"client_outcome_save_{key}"):
+                    if outcome == stage:
+                        core.update_status_fields(status, key, {"notes": notes})
+                        C.push_toast("Lead notes saved")
+                    else:
+                        C.set_stage(status, key, outcome, notes,
+                                    lead_label=row.get("company", ""))
                     st.rerun()
-            actions = entry.get("activity") or []
-            if actions:
-                with st.expander("Recorded manual sends"):
-                    for action in reversed(actions):
-                        st.caption(f"{action.get('at', '')} · "
-                                   f"{action.get('contact', '')} · "
-                                   f"{action.get('channel', '')}")
-                        st.code(action.get("message", ""), language=None)
 
 if view == "Outcomes & report":
     st.subheader("Attended meetings and report")

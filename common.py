@@ -132,6 +132,15 @@ h1 { border-bottom: 1.5px solid var(--aal-ink); padding-bottom: 10px; }
     box-shadow: 4px 4px 0 var(--aal-ink);
 }
 .stButton button:active:enabled { transform: translate(2px, 2px); box-shadow: none !important; }
+/* Disabled buttons keep a readable label instead of paper-on-paper text. */
+.stButton button:disabled, .stButton button[kind="primary"]:disabled,
+.stDownloadButton button:disabled {
+    background: #E3E0D6 !important;
+    border: 1.5px dashed #8A877F !important;
+    color: #5C5A55 !important;
+    box-shadow: none !important;
+    cursor: not-allowed;
+}
 
 /* expanders: panels with ink borders */
 [data-testid="stExpander"] {
@@ -628,8 +637,16 @@ def page_header(title: str, page_key: str):
                           "at the top of Clients to switch tasks."))
 
 
+def copy_text_button(text: str, label: str, key: str) -> None:
+    """Copy plain text, e.g. a final message to paste into LinkedIn."""
+    import html
+    copy_table_button(f"<p>{html.escape(text).replace(chr(10), '<br>')}</p>",
+                      text, label, key=key, done="Copied.")
+
+
 def copy_table_button(table_html: str, plain_text: str, label: str,
-                      key: str) -> None:
+                      key: str, done: str = "Copied. Paste it into your email."
+                      ) -> None:
     """Copy a table as HTML (pastes as a table in email) plus plain text."""
     import json
     import re
@@ -637,14 +654,16 @@ def copy_table_button(table_html: str, plain_text: str, label: str,
     ident = "copy-" + re.sub(r"[^A-Za-z0-9_-]", "-", key)
     # Escape markup characters so board text can neither close the script
     # nor trip the HTML sanitizer, which drops scripts containing tags.
-    payload = (json.dumps({"html": table_html, "text": plain_text})
+    payload = (json.dumps({"html": table_html, "text": plain_text,
+                           "done": done})
                .replace("<", "\\u003c").replace(">", "\\u003e")
                .replace("&", "\\u0026"))
     st.html(f"""
-<button id="{ident}" type="button" style="font:14px Archivo,Arial,sans-serif;
-  padding:8px 14px;border:1.5px solid #0A0A0A;background:#F4F2EC;
-  cursor:pointer;">{label}</button>
-<span id="{ident}-note" style="font:12px Arial,sans-serif;margin-left:8px;"></span>
+<button id="{ident}" type="button" style="width:100%;min-height:40px;
+  font:700 12px Archivo,Arial,sans-serif;letter-spacing:.08em;
+  text-transform:uppercase;padding:8px 14px;border:1.5px solid #0A0A0A;
+  background:transparent;color:#0A0A0A;cursor:pointer;">{label}</button>
+<div id="{ident}-note" style="font:12px Arial,sans-serif;margin-top:4px;"></div>
 <script>
 (() => {{
   const data = {payload};
@@ -655,9 +674,9 @@ def copy_table_button(table_html: str, plain_text: str, label: str,
       await navigator.clipboard.write([new ClipboardItem({{
         "text/html": new Blob([data.html], {{type: "text/html"}}),
         "text/plain": new Blob([data.text], {{type: "text/plain"}})}})]);
-      note.textContent = "Copied. Paste it into your email.";
+      note.textContent = data.done;
     }} catch (error) {{
-      note.textContent = "Copy was blocked. Select the table below and copy it.";
+      note.textContent = "Copy was blocked. Select the text below and copy it.";
     }}
   }};
 }})();

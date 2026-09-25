@@ -88,6 +88,11 @@ def main():
                  if widget.label == "Final message"]
         assert draft and draft[0].value.startswith("Hi there"), (
             draft[0].value if draft else "missing")
+        record = [button for button in at.button
+                  if button.label == "Record manual send"]
+        assert record and record[0].disabled, "no contact yet"
+        assert any("To record the send: add a contact" in str(item.value)
+                   for item in at.caption), "disabled send must say why"
         # Adding the contact must refresh an unsaved generated greeting.
         (data / "enriched_contacts.json").write_text(json.dumps({
             "greenhouse:example": [{"name": "Jane Doe", "title": "Hiring Lead",
@@ -100,8 +105,10 @@ def main():
             draft[0].value if draft else "missing")
         draft[0].set_value("Hi Jane - reviewed your Java opening. Let's talk.")
         at.run()
-        [button for button in at.button
-         if button.label == "Record manual send"][0].click()
+        record = [button for button in at.button
+                  if button.label == "Record manual send"]
+        assert record and not record[0].disabled
+        record[0].click()
         at.run()
         assert not at.exception, [error.value for error in at.exception]
         saved = json.loads((data / "inbox_status.json").read_text())
